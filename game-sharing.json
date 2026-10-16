@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 2,
+  "title": "SKYWING: Vida Selvagem",
+  "description": "Um simulador contemplativo de voo de pássaro: sinta o vento, suba em térmicas, descubra ninhos e explore um vale vivo.",
+  "defaultCaptions": {
+    "x": "Voe livre por um vale vivo em SKYWING: Vida Selvagem.",
+    "facebook": "Sinta o vento, plane nas térmicas e descubra ninhos em SKYWING: Vida Selvagem.",
+    "reddit": "SKYWING: Vida Selvagem é um simulador contemplativo de voo e exploração em um vale 3D.",
+    "discord": "Sobrevoe um vale vivo, acompanhe bandos e descubra novos ninhos em SKYWING: Vida Selvagem."
+  },
+  "assets": {
+    "og": "assets/share/og.png",
+    "favicon": "assets/share/favicon.png"
+  }
+}
