@@ -9,13 +9,17 @@ import type { Quality, SaveStore } from '../engine/save'
 import { Atmosphere } from './atmosphere'
 import { Bird } from './bird'
 import { Cities } from './cities'
+import { CITY_SITES, citySiteAt } from './cityLayout'
+import { HawkDirector, type EscapeReason, type PlayerView } from './hawks'
+import { MissionBoard, type Mission, type MissionEvent } from './missions'
+import { Score } from './score'
 import { CameraRig, type CamMode } from './cameraRig'
 import { Collectibles } from './collectibles'
 import { CONFIG } from './config'
 import { getBirdSpecies, type BirdSpeciesId } from './birdSpecies'
 import { createSkyState, hourForMode, skyAt } from './daylight'
 import { Fauna } from './fauna'
-import { FlightModel, type FlightEvent, type FlightInput } from './flight'
+import { FlightModel, type FlightEnv, type FlightEvent, type FlightInput } from './flight'
 import { Forest } from './forest'
 import { Fx } from './fx'
 import { compassName, createRun, discover, DISCOVERY_IDS, formatClock, kmh, NEST_COUNT, type DiscoveryId, type RunState } from './rules'
@@ -24,7 +28,7 @@ import { heightAt, LAKE, surfaceAt, WATER_LEVEL } from './terrain'
 import { TerrainManager, Water } from './terrainMesh'
 import { tuning } from './tuning'
 
-export type Warning = 'stall' | 'edge' | 'tired' | 'ceiling'
+export type Warning = 'hawk' | 'stall' | 'edge' | 'tired' | 'ceiling'
 
 export type HudData = {
   speedKmh: number
@@ -47,6 +51,15 @@ export type HudData = {
   nearestSeed: { meters: number; bearing: number; pitch: number } | null
   warnings: Warning[]
   boosting: boolean
+  score: number
+  best: number
+  combo: number
+  comboLeft: number
+  mission: { text: string; progress: number; target: number }
+  hawk: { phase: 'stalk' | 'stoop' | 'recover'; meters: number; bearing: number; pitch: number; danger: number } | null
+  perch: { meters: number; bearing: number; name: string } | null
+  landing: boolean
+  hit: boolean
 }
 
 export interface UiBridge {
@@ -103,6 +116,19 @@ export class Game {
   private hintsShown = new Set<string>()
   private skimFxTimer = 0
   private crashCooldown = 0
+  readonly score = new Score()
+  readonly missions = new MissionBoard(CITY_SITES.length)
+  private hawks!: HawkDirector
+  private readonly visitedPerches = new Set<number>()
+  private readonly citiesSeen = new Set<number>()
+  private lastSite = -1
+  private hitFlash = 0
+  private readonly env: FlightEnv = {
+    surface: surfaceAt,
+    wind: (out, x, y, z) => this.atm.sample(out, x, y, z),
+    roof: (x, z) => (this.cities ? this.cities.colliders.roofAt(x, z) : -Infinity),
+    wall: (x, y, z, m, out) => (this.cities ? this.cities.colliders.push(x, y, z, m, out) : false),
+  }
   onStateChange?: (s: GameState) => void
 
   constructor(
@@ -128,6 +154,8 @@ export class Game {
     this.input.sensitivity = save.data.sensitivity
     this.input.invertY = save.data.invertY
     this.flight.cruise = save.data.cruise
+    this.missions.allowHawk = save.data.hawks
+    this.missions.reset()
   }
 
   /** Constrói o mundo inteiro em etapas, informando progresso (0–1) e a legenda atual. */
@@ -171,6 +199,18 @@ export class Game {
       },
     })
     this.scene.add(this.fauna.mesh)
+    this.hawks = new HawkDirector(
+      this.fauna.hunter,
+      { ground: surfaceAt, roof: (x, z) => this.cities.colliders.roofAt(x, z) },
+      {
+        warn: pan => this.onHawkWarn(pan),
+        stoop: pan => this.audio.hawkScreech(pan, true),
+        dodge: () => this.onDodge(),
+        hit: dir => this.onHawkHit(dir),
+        escaped: reason => this.onHawkEscaped(reason),
+      },
+    )
+    this.hawks.enabled = this.save.data.hawks
     this.fx = new Fx(this.atm.thermals)
     this.scene.add(this.fx.group)
 
@@ -246,6 +286,17 @@ export class Game {
     this.rig.snap()
     this.skimTime = 0
     this.thermalIdle = 0
+    if (newRun || this.state !== 'playing') {
+      this.score.reset()
+      this.visitedPerches.clear()
+      this.citiesSeen.clear()
+      this.lastSite = -1
+      this.hitFlash = 0
+      this.missions.allowHawk = this.save.data.hawks
+      this.missions.reset()
+      this.cities?.setVisited([])
+      this.hawks?.reset()
+    }
   }
 
   private syncPrev(): void {
@@ -268,21 +319,17 @@ export class Game {
     this.prevQuat.copy(this.currQuat)
     const inp = this.state === 'title' ? this.attractInput() : this.playerInput()
     this.events.length = 0
-    this.flight.step(
-      dt,
-      inp,
-      {
-        surface: surfaceAt,
-        wind: (out, x, y, z) => this.atm.sample(out, x, y, z),
-      },
-      this.events,
-    )
+    this.flight.step(dt, inp, this.env, this.events)
     this.currPos.copy(this.flight.pos)
     _euler.set(this.flight.pitch, this.flight.yaw, this.flight.roll, 'YXZ')
     this.currQuat.setFromEuler(_euler)
     this.handleFlightEvents()
     this.fauna.update(dt, this.time, this.flight.pos, this.flight.vel, this.flight.forward)
-    if (this.state === 'playing') this.gameplay(dt)
+    if (this.state === 'playing') {
+      this.gameplay(dt)
+      this.updateHawks(dt)
+    }
+    this.hitFlash = Math.max(0, this.hitFlash - dt)
   }
 
   private playerInput(): FlightInput {
@@ -293,6 +340,7 @@ export class Game {
       flap: this.input.flap,
       flapPressed: this.input.consume('flapPressed'),
       boost: this.input.boost,
+      land: this.input.land,
     }
   }
 
@@ -332,6 +380,10 @@ export class Game {
           this.fx.burst(this.tmpV.copy(f.pos).setY(f.pos.y - 0.2), 'dust', 0.8)
           this.fx.burst(f.pos, 'feather', 0.3)
           break
+        case 'bump':
+          this.audio.bump()
+          this.fx.burst(f.pos, 'feather', 0.4)
+          break
         case 'land':
           this.audio.land()
           if (overWater) {
@@ -340,7 +392,7 @@ export class Game {
           } else {
             this.fx.burst(f.pos, 'dust', 0.8)
           }
-          if (this.state === 'playing') this.ui.toast(this.i18n.t('toast_land'), 'info')
+          if (this.state === 'playing') this.onLanded(e.hs, e.down)
           break
         case 'crash':
           this.audio.crash()
@@ -383,11 +435,21 @@ export class Game {
     this.collectibles.update(dt, this.viewScale(), f.pos, this.sky.daylight)
     this.atm.sample(this.airVel, f.pos.x, f.pos.y, f.pos.z)
     this.vario += (f.vel.y - this.vario) * Math.min(1, dt * 3)
+    this.score.update(dt)
+    if (!f.grounded) this.noteMission({ type: 'speed', kmh: kmh(f.vel.length()) })
+
+    // Chegada a uma cidade.
+    const site = citySiteAt(f.pos.x, f.pos.z, 0.9)
+    if (site !== this.lastSite) {
+      this.lastSite = site
+      if (site >= 0) this.onEnterCity(site)
+    }
 
     // Rasante no lago.
     const overWater = heightAt(f.pos.x, f.pos.z) < WATER_LEVEL - 0.3
     if (overWater && !f.grounded && f.agl < 4.5 && f.vel.length() > 8) {
       this.skimTime += dt
+      this.noteMission({ type: 'skim', seconds: dt })
       if (this.skimTime > 1.4 && discover(this.run, 'skim')) this.onDiscovery('skim')
       if (f.agl < 2.2 && Math.random() < dt * 5) {
         const p = this.tmpV.set(f.pos.x, WATER_LEVEL + 0.05, f.pos.z)
@@ -438,6 +500,8 @@ export class Game {
   private onSeed(p: THREE.Vector3): void {
     if (this.state !== 'playing') return
     this.run.seeds += 1
+    const pts = this.award(100, true)
+    this.noteMission({ type: 'seed' })
     this.audio.seed()
     this.fx.burst(p, 'seed', 1)
     this.save.update({ totalSeeds: this.save.data.totalSeeds + 1, bestSeeds: Math.max(this.save.data.bestSeeds, this.run.seeds) })
@@ -446,7 +510,7 @@ export class Game {
       this.ui.toast(this.i18n.t('hud_all_seeds'), 'good')
       this.audio.discover()
     } else {
-      this.ui.toast(this.i18n.t('toast_seed', { n: this.run.seeds, total: this.run.seedsGoal }), 'good')
+      this.ui.toast(this.i18n.t('toast_seed_pts', { n: this.run.seeds, total: this.run.seedsGoal, pts }), 'good')
     }
   }
 
@@ -464,6 +528,149 @@ export class Game {
     if (!discover(this.run, 'summit')) return
     this.fx.burst(p, 'sparkle', 2)
     this.onDiscovery('summit')
+  }
+
+  // --- Pontos, missões, cidades e pouso ---------------------------------------------------------
+
+  /** Soma pontos e guarda o recorde. */
+  private award(base: number, chained = false): number {
+    const gained = this.score.award(base, chained)
+    if (this.score.points > this.save.data.bestScore) this.save.update({ bestScore: this.score.points })
+    return gained
+  }
+
+  private noteMission(ev: MissionEvent): void {
+    const done = this.missions.note(ev)
+    if (!done) return
+    const pts = this.award(done.reward)
+    this.audio.mission()
+    this.ui.toast(this.i18n.t('toast_mission_done', { pts }), 'good')
+  }
+
+  missionText(m: Mission): string {
+    const city = m.site !== undefined ? CITY_SITES[m.site].name : ''
+    switch (m.kind) {
+      case 'seeds': return this.i18n.t('mission_seeds', { n: m.target })
+      case 'perch': return this.i18n.t('mission_perch', { city })
+      case 'city': return this.i18n.t('mission_city', { city })
+      case 'escape': return this.i18n.t('mission_escape')
+      case 'dodge': return this.i18n.t('mission_dodge')
+      case 'speed': return this.i18n.t('mission_speed', { n: m.target })
+      default: return this.i18n.t('mission_skim', { n: m.target })
+    }
+  }
+
+  private onEnterCity(site: number): void {
+    const name = CITY_SITES[site].name
+    this.ui.toast(this.i18n.t('toast_city_enter', { name }), 'info')
+    if (!this.hintsShown.has('perch')) {
+      this.hintsShown.add('perch')
+      this.ui.hint(this.i18n.t('hint_perch'))
+    }
+    if (!this.citiesSeen.has(site)) {
+      this.citiesSeen.add(site)
+      this.award(100)
+    }
+    this.noteMission({ type: 'city', site })
+  }
+
+  /** Poleiro sob o pássaro recém-pousado (mesma altura e dentro do anel). */
+  private perchUnder() {
+    const f = this.flight
+    for (const p of this.cities.perches) {
+      if (Math.hypot(f.pos.x - p.x, f.pos.z - p.z) <= p.radius + 1.2 && Math.abs(f.floorY - p.y) < 0.8) return p
+    }
+    return null
+  }
+
+  private onLanded(hs: number, down: number): void {
+    const f = this.flight
+    const perfect = down < 2.4 && hs < 8
+    const perch = this.perchUnder()
+    if (perch) {
+      f.stamina = CONFIG.stamina.max
+      this.fx.burst(this.tmpV.set(perch.x, perch.y + 0.5, perch.z), 'sparkle', 1.2)
+      if (!this.visitedPerches.has(perch.id)) {
+        this.visitedPerches.add(perch.id)
+        this.cities.setVisited(this.visitedPerches)
+        const pts = this.award(500, true)
+        this.audio.perch()
+        this.ui.toast(this.i18n.t('toast_perch', { city: CITY_SITES[perch.site].name, pts }), 'good')
+        this.noteMission({ type: 'perch', site: perch.site })
+        const id = `city${perch.site}` as DiscoveryId
+        if (discover(this.run, id)) this.onDiscovery(id)
+      } else {
+        this.ui.toast(this.i18n.t('toast_perch_again'), 'info')
+      }
+    } else if (!perfect) {
+      this.ui.toast(this.i18n.t('toast_land'), 'info')
+    }
+    if (perfect) {
+      const pts = this.award(perch ? 250 : 150)
+      this.ui.toast(this.i18n.t('toast_land_perfect', { pts }), 'good')
+      if (discover(this.run, 'perfect')) this.onDiscovery('perfect')
+    }
+  }
+
+  // --- Gavião caçador ---------------------------------------------------------------------------
+
+  setHawks(enabled: boolean): void {
+    if (this.hawks) this.hawks.enabled = enabled
+    this.missions.allowHawk = enabled
+    if (!enabled && (this.missions.current.kind === 'escape' || this.missions.current.kind === 'dodge')) this.missions.reset()
+  }
+
+  private updateHawks(dt: number): void {
+    const f = this.flight
+    const site = citySiteAt(f.pos.x, f.pos.z, 1)
+    const view: PlayerView = {
+      pos: f.pos,
+      vel: f.vel,
+      forward: f.forward,
+      grounded: f.grounded,
+      agl: f.agl,
+      withFlock: this.fauna.companions >= 3,
+      sheltered: f.grounded && site >= 0,
+      inCover: site >= 0 && f.agl < 14,
+      assisted: f.assisted,
+    }
+    this.hawks.update(dt, view)
+  }
+
+  private onHawkWarn(pan: number): void {
+    this.audio.hawkScreech(pan)
+    this.ui.toast(this.i18n.t('toast_hawk_warn'), 'warn')
+    if (!this.hintsShown.has('hawk')) {
+      this.hintsShown.add('hawk')
+      this.ui.hint(this.i18n.t('hint_hawk'))
+    }
+  }
+
+  private onDodge(): void {
+    this.audio.dodge()
+    const pts = this.award(400, true)
+    this.ui.toast(this.i18n.t('toast_dodge', { pts }), 'good')
+    this.noteMission({ type: 'dodge' })
+    if (discover(this.run, 'dodge')) this.onDiscovery('dodge')
+  }
+
+  private onHawkHit(dir: THREE.Vector3): void {
+    this.audio.crash()
+    this.audio.hawkScreech(0, true)
+    this.fx.burst(this.flight.pos, 'feather', 2)
+    this.flight.knock(dir.x, dir.z, 6)
+    this.score.breakCombo()
+    this.score.penalty(150)
+    this.hitFlash = 0.8
+    this.ui.toast(this.i18n.t('toast_hawk_hit'), 'warn')
+  }
+
+  private onHawkEscaped(reason: EscapeReason): void {
+    const pts = this.award(800, true)
+    this.audio.discover()
+    this.ui.toast(this.i18n.t(`toast_escape_${reason}` as 'toast_escape_timeout', { pts }), 'good')
+    this.noteMission({ type: 'escape' })
+    if (discover(this.run, 'hawk')) this.onDiscovery('hawk')
   }
 
   // --- Render --------------------------------------------------------------------------------
@@ -572,7 +779,7 @@ export class Game {
     this.clouds.update(this.sky, cam, this.drift, this.renderer.gl.domElement.height)
     this.terrain.update(cam.position.x, cam.position.z, 3)
     this.water.update(this.sky, cam.position, this.time)
-    this.cities.update(this.sky.daylight)
+    this.cities.update(this.sky.daylight, dt, this.time)
     this.forest.update(cam.position.x, cam.position.z, agl, dt, this.sky, this.time, this.densityFor(this.quality))
     this.collectibles.update(0, this.viewScale(), this.renderPos, this.sky.daylight)
     const wind = this.tmpV.set(this.atm.windSpeed * Math.cos(this.atm.windAngle), 0, this.atm.windSpeed * Math.sin(this.atm.windAngle))
@@ -615,10 +822,34 @@ export class Game {
       nearestSeed = { meters: Math.round(near.dist), bearing: rel, pitch: Math.asin(near.dir.y) }
     }
     const warnings: Warning[] = []
+    if (this.hawks.phase === 'stoop') warnings.push('hawk')
     if (f.stalled && !f.grounded) warnings.push('stall')
     if (Math.hypot(f.pos.x, f.pos.z) > CONFIG.world.softRadius) warnings.push('edge')
     if (f.stamina < 18 && !f.grounded) warnings.push('tired')
     if (f.pos.y > CONFIG.flight.ceiling - 12) warnings.push('ceiling')
+    let hawk: HudData['hawk'] = null
+    if (this.hawks.phase !== 'idle' && this.fauna.hunter.active) {
+      const d = this.tmpV.copy(this.fauna.hunter.pos).sub(f.pos)
+      const meters = d.length()
+      const dirYaw = Math.atan2(-d.x, -d.z)
+      hawk = {
+        phase: this.hawks.phase,
+        meters: Math.round(meters),
+        bearing: Math.atan2(Math.sin(dirYaw - f.yaw), Math.cos(dirYaw - f.yaw)),
+        pitch: Math.asin(THREE.MathUtils.clamp(d.y / Math.max(meters, 1), -1, 1)),
+        danger: this.hawks.danger,
+      }
+    }
+    let perch: HudData['perch'] = null
+    const np = this.cities.nearestPerch(f.pos.x, f.pos.y, f.pos.z)
+    if (np && np.dist < 450 && !f.grounded) {
+      const dirYaw = Math.atan2(-(np.perch.x - f.pos.x), -(np.perch.z - f.pos.z))
+      perch = {
+        meters: Math.round(np.dist),
+        bearing: Math.atan2(Math.sin(dirYaw - f.yaw), Math.cos(dirYaw - f.yaw)),
+        name: CITY_SITES[np.perch.site].name,
+      }
+    }
     const windToward = Math.atan2(Math.cos(this.atm.windAngle), -Math.sin(this.atm.windAngle))
     return {
       speedKmh: kmh(f.vel.length()),
@@ -641,6 +872,15 @@ export class Game {
       nearestSeed,
       warnings,
       boosting: f.boosting,
+      score: this.score.points,
+      best: Math.max(this.save.data.bestScore, this.score.points),
+      combo: this.score.multiplier,
+      comboLeft: this.score.comboLeft,
+      mission: { text: this.missionText(this.missions.current), progress: Math.min(this.missions.current.progress, this.missions.current.target), target: this.missions.current.target },
+      hawk,
+      perch,
+      landing: f.landing,
+      hit: this.hitFlash > 0,
     }
   }
 
@@ -687,6 +927,10 @@ export class Game {
       birdSpecies: this.bird.species.id,
       flightAssist: this.flight.assisted,
       cityBuildings: this.cities?.buildingCount ?? 0,
+      perches: this.cities?.perches.length ?? 0,
+      hawkPhase: this.hawks?.phase ?? 'idle',
+      score: this.score.points,
+      mission: this.missions.current.kind,
     }
   }
 }

@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { Atmosphere } from './atmosphere'
 import { CITY_SITES } from './cityLayout'
+import type { HunterBody } from './hawks'
 import { hash2, heightAt, LAKE, surfaceAt } from './terrain'
 
 type Mode = 'patrol' | 'curious' | 'scatter'
@@ -94,6 +95,9 @@ export class Fauna {
   readonly mesh: THREE.InstancedMesh
   private readonly flocks: Flock[] = []
   private readonly hawks: Hawk[] = []
+  /** Gavião caçador controlado pelo HawkDirector; fica invisível quando inativo. */
+  readonly hunter: HunterBody = { pos: new THREE.Vector3(0, -500, 0), vel: new THREE.Vector3(0, 0, -1), bank: 0, flap: 0, active: false, fold: 0 }
+  private hunterIndex = 0
   private readonly phaseAttr: THREE.InstancedBufferAttribute
   private readonly flapAttr: THREE.InstancedBufferAttribute
   private readonly timeU = { value: 0 }
@@ -201,6 +205,11 @@ export class Fauna {
       this.mesh.setColorAt(idx, this.col)
       idx += 1
     }
+    // Gavião caçador: última instância, rufo e maior que os gaviões que planam.
+    this.hunterIndex = idx
+    this.col.setRGB(0.36, 0.2, 0.1, THREE.SRGBColorSpace)
+    this.mesh.setColorAt(idx, this.col)
+    idx += 1
     this.mesh.count = idx
     this.mesh.instanceColor!.needsUpdate = true
   }
@@ -228,9 +237,23 @@ export class Fauna {
       this.writeBoid(idx, h.boid, 2.2, dt)
       idx += 1
     }
+    this.writeHunter()
     this.mesh.instanceMatrix.needsUpdate = true
     this.phaseAttr.needsUpdate = true
     this.flapAttr.needsUpdate = true
+  }
+
+  private writeHunter(): void {
+    const h = this.hunter
+    const v = h.vel
+    const hs = Math.hypot(v.x, v.z)
+    this.e.set(Math.atan2(v.y, Math.max(hs, 0.1)), Math.atan2(-v.x, -v.z), h.bank, 'YXZ')
+    this.q.setFromEuler(this.e)
+    const s = h.active ? 2.7 : 0.0001
+    this.sc.set(s * (1 - 0.5 * h.fold), s, s * (1 + 0.15 * h.fold))
+    this.m.compose(h.pos, this.q, this.sc)
+    this.mesh.setMatrixAt(this.hunterIndex, this.m)
+    this.flapAttr.array[this.hunterIndex] = h.flap
   }
 
   private writeBoid(i: number, b: Boid, scale: number, dt: number): void {

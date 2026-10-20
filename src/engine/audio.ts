@@ -348,6 +348,76 @@ export class Audio {
     this.burst(110, 2, 0.28, 0.1, 0.7, 'lowpass')
   }
 
+  /** Grito do gavião: duas notas agudas descendentes com um fio de ruído. */
+  hawkScreech(pan = 0, urgent = false): void {
+    if (!this.ctx) return
+    const ctx = this.ctx
+    const panner = ctx.createStereoPanner()
+    panner.pan.value = pan
+    panner.connect(this.sfx!)
+    const calls = urgent ? 3 : 2
+    for (let i = 0; i < calls; i += 1) {
+      const t = ctx.currentTime + i * 0.38
+      const o = ctx.createOscillator()
+      o.type = 'sawtooth'
+      o.frequency.setValueAtTime(3300, t)
+      o.frequency.exponentialRampToValueAtTime(1500, t + 0.32)
+      const f = ctx.createBiquadFilter()
+      f.type = 'bandpass'
+      f.frequency.value = 2400
+      f.Q.value = 2.2
+      const g = ctx.createGain()
+      g.gain.setValueAtTime(0, t)
+      g.gain.linearRampToValueAtTime(urgent ? 0.2 : 0.14, t + 0.03)
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.36)
+      o.connect(f).connect(g).connect(panner)
+      o.start(t)
+      o.stop(t + 0.4)
+    }
+    this.burst(3000, 1.2, 0.08, 0.02, 0.3, 'bandpass', pan)
+  }
+
+  /** Desvio por pouco: sopro rápido e agudo. */
+  dodge(): void {
+    this.burst(900, 0.6, 0.4, 0.01, 0.35, 'bandpass')
+    this.burst(3200, 1.2, 0.14, 0.02, 0.25, 'highpass')
+  }
+
+  /** Pouso em poleiro: acorde curto e brilhante. */
+  perch(): void {
+    if (!this.ctx) return
+    const t = this.ctx.currentTime
+    for (const [i, n] of [72, 76, 79, 84].entries()) {
+      const o = this.ctx.createOscillator()
+      o.type = 'triangle'
+      o.frequency.value = mtof(n)
+      const g = this.env(this.sfx!, 0.18, 0.01, 0.9, i * 0.07)
+      o.connect(g)
+      o.start(t + i * 0.07)
+      o.stop(t + i * 0.07 + 1.1)
+    }
+  }
+
+  /** Pancada leve numa parede. */
+  bump(): void {
+    this.burst(220, 0.8, 0.3, 0.005, 0.18, 'lowpass')
+  }
+
+  /** Missão concluída: escala ascendente. */
+  mission(): void {
+    if (!this.ctx) return
+    const t = this.ctx.currentTime
+    for (const [i, n] of [67, 71, 74, 79, 83].entries()) {
+      const o = this.ctx.createOscillator()
+      o.type = 'sine'
+      o.frequency.value = mtof(n)
+      const g = this.env(this.sfx!, 0.17, 0.01, 0.7, i * 0.09)
+      o.connect(g)
+      o.start(t + i * 0.09)
+      o.stop(t + i * 0.09 + 0.9)
+    }
+  }
+
   click(): void {
     if (!this.ctx) return
     const o = this.ctx.createOscillator()

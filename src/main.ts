@@ -28,6 +28,7 @@ async function boot(): Promise<void> {
       game.rig.reducedMotion = d.reducedMotion
       game.flight.cruise = d.cruise
       game.flight.assisted = d.flightAssist
+      game.setHawks(d.hawks)
       if (patch?.quality) game.applyQuality(d.quality)
     }
   }
@@ -97,6 +98,8 @@ async function boot(): Promise<void> {
       maxSpeed: game?.run.maxSpeed ?? 0,
       seeds: game?.run.seeds ?? 0,
       goal: game?.run.seedsGoal ?? 0,
+      score: game?.score.points ?? 0,
+      best: Math.max(save.data.bestScore, game?.score.points ?? 0),
     }),
   })
   ui.show('boot')

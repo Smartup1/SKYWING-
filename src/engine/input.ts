@@ -6,7 +6,7 @@ export type Action = 'pause' | 'camera' | 'cruise' | 'flapPressed'
 
 const MOVEMENT_KEYS = new Set([
   'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'Space', 'ShiftLeft', 'ShiftRight',
-  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyC', 'KeyF',
+  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyC', 'KeyF', 'KeyL',
 ])
 
 const approach = (v: number, target: number, rate: number, dt: number) => {
@@ -25,6 +25,8 @@ export class Input {
   roll = 0
   flap = false
   boost = false
+  /** Segurando "pousar" (L ou botão B do controle). */
+  land = false
   /** Quando falso, as teclas de voo são ignoradas (menus). */
   enabled = false
   private readonly keys = new Set<string>()
@@ -35,6 +37,7 @@ export class Input {
   private padLookY = 0
   private padFlap = false
   private padBoost = false
+  private padLand = false
   private padPitch = 0
   private padBank = 0
   private padRoll = 0
@@ -98,6 +101,7 @@ export class Input {
     this.roll = approach(this.roll, rollT, rollT === 0 ? 6 : 8, dt)
     this.flap = live && (this.held('Space') || this.padFlap)
     this.boost = live && (this.held('ShiftLeft', 'ShiftRight') || this.padBoost)
+    this.land = live && (this.held('KeyL') || this.padLand)
   }
 
   /** Movimento de olhar acumulado desde a última leitura (radianos). */
@@ -121,7 +125,7 @@ export class Input {
     const pad = navigator.getGamepads?.().find(p => p?.connected)
     if (!pad) {
       this.padPitch = this.padBank = this.padRoll = this.padLookX = this.padLookY = 0
-      this.padFlap = this.padBoost = false
+      this.padFlap = this.padBoost = this.padLand = false
       return
     }
     const dz = (v: number) => (Math.abs(v) < 0.14 ? 0 : v)
@@ -133,6 +137,7 @@ export class Input {
     this.padLookY = dz(pad.axes[3] ?? 0)
     this.padRoll = (b[4] ? 1 : 0) - (b[5] ? 1 : 0)
     this.padFlap = !!b[0]
+    this.padLand = !!b[1]
     this.padBoost = !!b[7] || (pad.buttons[7]?.value ?? 0) > 0.4
     if (edge(0) && this.enabled) this.pressed.add('flapPressed')
     if (edge(3)) this.pressed.add('camera')
