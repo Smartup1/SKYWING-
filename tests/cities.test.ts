@@ -4,9 +4,9 @@ import { CITY_SITES, isUrbanAt } from '../src/game/cityLayout'
 import { nestSites, seedPositions } from '../src/game/collectibles'
 
 describe('cidades do vale', () => {
-  it('constrói três assentamentos identificáveis com muitas edificações instanciadas', () => {
+  it('constrói cinco assentamentos identificáveis com muitas edificações instanciadas', () => {
     const cities = new Cities()
-    expect(CITY_SITES.map(site => site.name)).toEqual(['Vale Claro', 'Lago Azul', 'Campina'])
+    expect(CITY_SITES.map(site => site.name)).toEqual(['Vale Claro', 'Lago Azul', 'Campina', 'Remanso', 'Mirante'])
     expect(cities.group.name).toBe('procedural-cities')
     expect(cities.buildingCount).toBeGreaterThan(100)
     expect(cities.group.children.length).toBeGreaterThanOrEqual(6)
