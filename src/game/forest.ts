@@ -9,24 +9,15 @@ import { coniferShare, forestDensity, groundColor, hash2, heightAt, noise2, slop
 import { isUrbanAt } from './cityLayout'
 import type { SkyState } from './daylight'
 
-// ============================================================================
-// Global wind — shared by trees, grass and clouds
-// ============================================================================
-
 export type WindUniforms = {
   uTime: { value: number }
-  /** (dir.x, strength, dir.z) — dir normalizado no plano horizontal, strength 0..1. */
   uWind: { value: THREE.Vector3 }
 }
 
 export class WindState {
-  /** Direção horizontal (normalizada). */
   readonly direction = new THREE.Vector3(1, 0, 0.35).normalize()
-  /** Força base 0..1 (pode ser multiplicada externamente por clima). */
   strength = 0.55
-  /** Multiplicador de rajada suave (0.5..1.5). */
   gust = 1
-
   readonly uniforms: WindUniforms = {
     uTime: { value: 0 },
     uWind: { value: new THREE.Vector3(this.direction.x, this.strength, this.direction.z) },
@@ -34,7 +25,6 @@ export class WindState {
 
   update(time: number): void {
     this.uniforms.uTime.value = time
-    // Rajada lenta por seno + ruído do tempo (não gaussiano) — parece vento real
     this.gust = 0.65
       + 0.25 * Math.sin(time * 0.27)
       + 0.10 * Math.sin(time * 0.71 + 1.4)
@@ -42,10 +32,6 @@ export class WindState {
     this.uniforms.uWind.value.set(this.direction.x * s, s, this.direction.z * s)
   }
 }
-
-// ============================================================================
-// Helpers
-// ============================================================================
 
 const flat = (g: THREE.BufferGeometry): THREE.BufferGeometry => (g.index ? g.toNonIndexed() : g)
 
@@ -72,10 +58,6 @@ function paint(g: THREE.BufferGeometry, fn: (y: number, i: number) => THREE.Colo
   return g
 }
 
-// ============================================================================
-// Procedural billboards for far LOD — cheaper than 5000 instanced geometries
-// ============================================================================
-
 function makeTreeBillboard(kind: 'broad' | 'conifer' | 'rock'): THREE.CanvasTexture {
   const S = 128
   const c = document.createElement('canvas')
@@ -85,7 +67,6 @@ function makeTreeBillboard(kind: 'broad' | 'conifer' | 'rock'): THREE.CanvasText
   ctx.clearRect(0, 0, S, S)
 
   if (kind === 'broad') {
-    // Trunk
     ctx.fillStyle = '#3a2414'
     ctx.beginPath()
     ctx.moveTo(S * 0.46, S * 0.98)
@@ -94,9 +75,8 @@ function makeTreeBillboard(kind: 'broad' | 'conifer' | 'rock'): THREE.CanvasText
     ctx.lineTo(S * 0.54, S * 0.98)
     ctx.closePath()
     ctx.fill()
-    // Canopy — overlapping blobs with radial gradients
     for (let i = 0; i < 22; i += 1) {
-      const ang = i * 2.399 // golden angle
+      const ang = i * 2.399
       const rad = 0.08 + (i / 22) * 0.22
       const cx = S * 0.5 + Math.cos(ang) * rad * S * (0.5 + 0.35 * Math.sin(i * 1.3))
       const cy = S * 0.34 + Math.sin(ang) * rad * S * 0.55
@@ -111,10 +91,8 @@ function makeTreeBillboard(kind: 'broad' | 'conifer' | 'rock'): THREE.CanvasText
       ctx.fill()
     }
   } else if (kind === 'conifer') {
-    // Trunk
     ctx.fillStyle = '#2a1a0a'
     ctx.fillRect(S * 0.47, S * 0.85, S * 0.06, S * 0.15)
-    // Four stacked triangles (like a real conifer)
     for (let tier = 0; tier < 4; tier += 1) {
       const y0 = S * (0.06 + tier * 0.19)
       const y1 = S * (0.32 + tier * 0.19)
@@ -129,7 +107,6 @@ function makeTreeBillboard(kind: 'broad' | 'conifer' | 'rock'): THREE.CanvasText
       ctx.fill()
     }
   } else {
-    // Rock — bumpy silhouette with shading
     ctx.fillStyle = '#7a7568'
     ctx.beginPath()
     ctx.moveTo(S * 0.12, S * 0.85)
@@ -165,18 +142,8 @@ function billboardGeometry(w: number, h: number, planes = 3): THREE.BufferGeomet
   return mergeGeometries(parts)!
 }
 
-// ============================================================================
-// Wind shader injection — respects InstancedMesh and existing materials
-// ============================================================================
-
 const INJECT_CACHE = new WeakSet<THREE.Material>()
 
-/**
- * Inject a wind animation into the vertex shader.
- * Uses a shared `WindUniforms` so all materials obey the same global wind.
- * `scale` controls how far the top of the tree bends (in local units).
- * `bendExp` shapes the vertical falloff (>1 = only top bends, <1 = whole tree).
- */
 function injectWind(mat: THREE.Material, uniforms: WindUniforms, scale: number, bendExp: number): void {
   if (INJECT_CACHE.has(mat)) return
   INJECT_CACHE.add(mat)
@@ -191,7 +158,6 @@ function injectWind(mat: THREE.Material, uniforms: WindUniforms, scale: number, 
     ` + shader.vertexShader.replace(
       '#include <begin_vertex>',
       `#include <begin_vertex>
-       // --- wind ---
        #ifdef USE_INSTANCING
          vec3 iPos = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);
        #else
@@ -206,10 +172,6 @@ function injectWind(mat: THREE.Material, uniforms: WindUniforms, scale: number, 
   }
 }
 
-// ============================================================================
-// Procedural fallbacks — cached so failures don't re-allocate geometry
-// ============================================================================
-
 let _lowBroad: THREE.BufferGeometry | null = null
 let _lowConifer: THREE.BufferGeometry | null = null
 let _lowRock: THREE.BufferGeometry | null = null
@@ -218,7 +180,6 @@ function lowPolyBroad(): THREE.BufferGeometry {
   if (_lowBroad) return _lowBroad
   const parts: THREE.BufferGeometry[] = []
   parts.push(paint(flat(new THREE.CylinderGeometry(0.025, 0.04, 0.42, 6).translate(0, 0.21, 0)), () => new THREE.Color(0x4a3524)))
-  // 3 leaf-cluster variants spread across cells for visual variety
   const blobs: [number, number, number, number][] = [
     [0, 0.62, 0, 0.34], [0.2, 0.52, 0.08, 0.24], [-0.18, 0.56, -0.1, 0.26],
     [0.04, 0.82, -0.06, 0.22], [-0.04, 0.5, 0.2, 0.22],
@@ -268,10 +229,6 @@ function lowPolyRock(): THREE.BufferGeometry {
   return ng
 }
 
-// ============================================================================
-// GLB loader with proper fallback
-// ============================================================================
-
 async function loadProp(assets: Assets, url: string, fallback: () => Prop): Promise<Prop> {
   try {
     const gltf = await assets.gltf(url)
@@ -290,7 +247,6 @@ async function loadProp(assets: Assets, url: string, fallback: () => Prop): Prom
     g.scale(1 / h, 1 / h, 1 / h)
     g.computeBoundingSphere()
     const src = (Array.isArray(mesh.material) ? mesh.material[0] : mesh.material) as THREE.MeshStandardMaterial
-    // Clone so we can inject wind per-mesh without bleeding into other users
     const mat = src.clone()
     mat.metalness = 0
     mat.roughness = Math.max(mat.roughness ?? 0.9, 0.85)
@@ -302,10 +258,6 @@ async function loadProp(assets: Assets, url: string, fallback: () => Prop): Prom
     return fallback()
   }
 }
-
-// ============================================================================
-// Cells
-// ============================================================================
 
 type Cell = { t: 1 | 2 | 3; x: number; y: number; z: number; s: number; r: number; tilt: number }
 
@@ -332,11 +284,9 @@ function evalCell(ix: number, iz: number): Cell | null {
     const s = (conifer ? 22 + hash2(ix, iz, 6) * 14 : 15 + hash2(ix, iz, 6) * 10) * (0.85 + 0.3 * fd)
     return { t: conifer ? 2 : 1, x: px, y: h - 0.4, z: pz, s, r: rot, tilt: (hash2(ix, iz, 7) - 0.5) * 0.06 }
   }
-  // Isolated tree in open field
   if (fd < 0.3 && slope < 0.45 && h < 100 && hash2(ix, iz, 8) < 0.02) {
     return { t: 1, x: px, y: h - 0.3, z: pz, s: 13 + hash2(ix, iz, 6) * 8, r: rot, tilt: 0 }
   }
-  // Rock: slopes, altitudes and shorelines
   const rockChance = slope > 0.4 ? 0.1 : h > 110 ? 0.07 : h < 4 ? 0.025 : 0.004
   if (hash2(ix, iz, 9) < rockChance) {
     const big = h > 90 || slope > 0.6 ? 1.8 : 1
@@ -344,10 +294,6 @@ function evalCell(ix: number, iz: number): Cell | null {
   }
   return null
 }
-
-// ============================================================================
-// Placement
-// ============================================================================
 
 const _m = new THREE.Matrix4()
 const _q = new THREE.Quaternion()
@@ -367,10 +313,6 @@ function place(mesh: THREE.InstancedMesh, i: number, c: Cell, widthScale: number
   mesh.setColorAt(i, _cc)
 }
 
-// ============================================================================
-// Season tint — multiplies instanceColor via material.color
-// ============================================================================
-
 export type Season = 'spring' | 'summer' | 'autumn' | 'winter'
 
 const SEASON_TINT: Record<Season, THREE.Color> = {
@@ -379,10 +321,6 @@ const SEASON_TINT: Record<Season, THREE.Color> = {
   autumn: new THREE.Color(1.30, 0.92, 0.55),
   winter: new THREE.Color(0.82, 0.86, 0.94),
 }
-
-// ============================================================================
-// Forest
-// ============================================================================
 
 export class Forest {
   readonly group = new THREE.Group()
@@ -394,15 +332,12 @@ export class Forest {
   readonly wind = new WindState()
   season: Season = 'summer'
 
-  // Near (GLB or fallback geometry) — cast shadows
   private nearBroad!: THREE.InstancedMesh
   private nearConifer!: THREE.InstancedMesh
   private nearRock!: THREE.InstancedMesh
-  // Mid (lowpoly geometry, no shadow) — medium distance
   private midBroad!: THREE.InstancedMesh
   private midConifer!: THREE.InstancedMesh
   private midRock!: THREE.InstancedMesh
-  // Far (billboard cross-quad) — up to farRadius
   private farBroad!: THREE.InstancedMesh
   private farConifer!: THREE.InstancedMesh
   private farRock!: THREE.InstancedMesh
@@ -416,6 +351,12 @@ export class Forest {
   private nearCap = 70
   private midCap = 380
   private grass?: GrassField
+  private disposed = false
+
+  // Rastreamento de recursos próprios para dispose.
+  private readonly ownedGeoms = new Set<THREE.BufferGeometry>()
+  private readonly ownedMats = new Set<THREE.Material>()
+  private readonly ownedTextures = new Set<THREE.Texture>()
 
   async load(assets: Assets, onProgress: (p: number) => void): Promise<void> {
     const mk = (g: () => THREE.BufferGeometry): (() => Prop) => () =>
@@ -429,20 +370,23 @@ export class Forest {
         material: new THREE.MeshStandardMaterial({ color: 0x8a6a3a }),
       })),
     ])
+    if (this.disposed) return
+    for (const p of [this.broad, this.conifer, this.rock, this.nest]) {
+      this.ownedGeoms.add(p.geometry)
+      this.ownedMats.add(p.material as THREE.Material)
+    }
 
-    // --- Wind injection (near + mid) ---
-    // Tree tops sway more than trunks (bendExp > 1)
     injectWind(this.broad.material, this.wind.uniforms, 0.14, 1.8)
     injectWind(this.conifer.material, this.wind.uniforms, 0.10, 2.0)
-    injectWind(this.rock.material, this.wind.uniforms, 0.0, 1.0) // rocks: no wind
+    injectWind(this.rock.material, this.wind.uniforms, 0.0, 1.0)
 
     onProgress(0.4)
+    if (this.disposed) return
 
-    // Near: nearCap per kind, shadows on
     const mkNear = (p: Prop, cap: number) => this.mkInst(p, cap, true, true)
-    // Mid: same materials, no shadow, cap larger
     const mkMid = (p: Prop, cap: number) => {
       const mat = (p.material as THREE.MeshStandardMaterial).clone()
+      this.ownedMats.add(mat)
       injectWind(mat, this.wind.uniforms, 0.10, 1.9)
       const m = new THREE.InstancedMesh(p.geometry, mat, cap)
       m.castShadow = false
@@ -452,16 +396,19 @@ export class Forest {
       this.group.add(m)
       return m
     }
-    // Far: billboard
     const mkFar = (kind: 'broad' | 'conifer' | 'rock', cap: number) => {
+      const tex = makeTreeBillboard(kind)
+      this.ownedTextures.add(tex)
       const mat = new THREE.MeshLambertMaterial({
-        map: makeTreeBillboard(kind),
+        map: tex,
         alphaTest: 0.45,
         side: THREE.DoubleSide,
         color: 0xffffff,
         fog: true,
       })
+      this.ownedMats.add(mat)
       const geo = billboardGeometry(kind === 'conifer' ? 1.4 : 2.2, kind === 'rock' ? 0.9 : 1.9, 3)
+      this.ownedGeoms.add(geo)
       const m = new THREE.InstancedMesh(geo, mat, cap)
       m.castShadow = false
       m.frustumCulled = false
@@ -474,26 +421,43 @@ export class Forest {
     this.nearBroad = mkNear(this.broad, this.nearCap)
     this.nearConifer = mkNear(this.conifer, this.nearCap)
     this.nearRock = mkNear(this.rock, 60)
-
     this.midBroad = mkMid(this.broad, this.midCap)
     this.midConifer = mkMid(this.conifer, this.midCap)
     this.midRock = mkMid(this.rock, 180)
-
     this.farBroad = mkFar('broad', 6000)
     this.farConifer = mkFar('conifer', 6000)
     this.farRock = mkFar('rock', 1500)
 
-    // Pre-warm cell cache in slices
     const R = Math.ceil(this.farRadius / CELL)
     for (let iz = -R; iz <= R; iz += 1) {
+      if (this.disposed) return
       for (let ix = -R; ix <= R; ix += 1) this.cell(ix, iz)
       if (iz % 8 === 0) {
         onProgress(0.4 + 0.6 * ((iz + R) / (2 * R)))
         await new Promise(r => setTimeout(r, 0))
       }
     }
+    if (this.disposed) return
     this.grass = new GrassField(this.wind)
     this.group.add(this.grass.group)
+  }
+
+  dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
+    this.grass?.dispose()
+    this.grass = undefined
+    for (const m of [this.nearBroad, this.nearConifer, this.nearRock, this.midBroad, this.midConifer, this.midRock, this.farBroad, this.farConifer, this.farRock]) {
+      if (m) m.dispose()
+    }
+    for (const g of this.ownedGeoms) g.dispose()
+    for (const m of this.ownedMats) m.dispose()
+    for (const t of this.ownedTextures) t.dispose()
+    this.ownedGeoms.clear()
+    this.ownedMats.clear()
+    this.ownedTextures.clear()
+    this.cells.clear()
+    this.group.clear()
   }
 
   private mkInst(p: Prop, cap: number, shadow: boolean, receive: boolean): THREE.InstancedMesh {
@@ -517,7 +481,6 @@ export class Forest {
     return c
   }
 
-  /** Evict cells far from camera when the map grows too large. */
   private evictFarCells(cx: number, cz: number): void {
     if (this.cells.size < 60000) return
     const R = 120
@@ -529,8 +492,8 @@ export class Forest {
     for (const k of toDelete) this.cells.delete(k)
   }
 
-  /** Reposiciona as instâncias ao redor da câmera. */
   update(camX: number, camZ: number, camAgl: number, dt: number, sky: SkyState, time: number, density: number): void {
+    if (this.disposed) return
     this.wind.update(time)
     if (Math.hypot(camX - this.lastX, camZ - this.lastZ) > 22) {
       this.lastX = camX
@@ -542,6 +505,7 @@ export class Forest {
   }
 
   forceRebuild(camX: number, camZ: number, density: number): void {
+    if (this.disposed) return
     this.lastX = camX
     this.lastZ = camZ
     this.rebuild(camX, camZ, density)
@@ -556,15 +520,14 @@ export class Forest {
     ;(this.midConifer.material as THREE.MeshStandardMaterial).color.copy(t)
     ;(this.farBroad.material as THREE.MeshLambertMaterial).color.copy(t)
     ;(this.farConifer.material as THREE.MeshLambertMaterial).color.copy(t)
-    // Grass picks it up in its own update loop
   }
 
   private rebuild(camX: number, camZ: number, density: number): void {
+    if (this.disposed) return
     const R = Math.ceil(this.farRadius / CELL)
     const cx = Math.floor(camX / CELL)
     const cz = Math.floor(camZ / CELL)
 
-    // Counters
     let nb = 0, nc = 0, nr = 0
     let mb = 0, mc = 0, mr = 0
     let fb = 0, fc = 0, fr = 0
@@ -586,7 +549,6 @@ export class Forest {
         if (d2 > farR2) continue
 
         if (c.t === 3) {
-          // Rocks: near → near geom, mid → mid geom, far → billboard
           if (d2 < nearRockR2 && nr < 60) place(this.nearRock, nr++, c, 1, 1)
           else if (d2 < midRockR2 && mr < 180) place(this.midRock, mr++, c, 1, 0.95)
           else if (fr < 1500) place(this.farRock, fr++, c, 0.8, 0.9 + hash2(ix, iz, 20) * 0.2)
@@ -613,6 +575,7 @@ export class Forest {
   }
 
   setShadows(on: boolean): void {
+    if (!this.nearBroad) return
     this.nearBroad.castShadow = on
     this.nearConifer.castShadow = on
     this.nearRock.castShadow = on
@@ -698,6 +661,12 @@ class GrassField {
   readonly group = new THREE.Group()
   private readonly tufts: THREE.InstancedMesh
   private readonly flowers: THREE.InstancedMesh
+  private readonly tuftGeo: THREE.BufferGeometry
+  private readonly flowerGeo: THREE.BufferGeometry
+  private readonly tuftMat: THREE.MeshLambertMaterial
+  private readonly flowerMat: THREE.MeshLambertMaterial
+  private readonly tuftTex: THREE.CanvasTexture
+  private readonly flowerTex: THREE.CanvasTexture
   private lastX = Infinity
   private lastZ = Infinity
   private job: Generator<void, void, void> | null = null
@@ -710,26 +679,28 @@ class GrassField {
   private nT = 0
   private nF = 0
   private densityScale = 1
+  private disposed = false
 
   constructor(wind: WindState) {
-    // Tufts — Lambert with wind injection
-    const mat = new THREE.MeshLambertMaterial({
-      map: grassTexture(),
+    this.tuftTex = grassTexture()
+    this.tuftMat = new THREE.MeshLambertMaterial({
+      map: this.tuftTex,
       alphaTest: 0.42,
       side: THREE.DoubleSide,
     })
-    injectWind(mat, wind.uniforms, 0.22, 1.55)
+    injectWind(this.tuftMat, wind.uniforms, 0.22, 1.55)
+    this.tuftGeo = crossQuads(0.9, 0.62, 3)
+    this.tufts = new THREE.InstancedMesh(this.tuftGeo, this.tuftMat, this.capT)
 
-    // Two-pass grass: main mesh + backface pass for density
-    this.tufts = new THREE.InstancedMesh(crossQuads(0.9, 0.62, 3), mat, this.capT)
-
-    const fmat = new THREE.MeshLambertMaterial({
-      map: flowerTexture(),
+    this.flowerTex = flowerTexture()
+    this.flowerMat = new THREE.MeshLambertMaterial({
+      map: this.flowerTex,
       alphaTest: 0.5,
       side: THREE.DoubleSide,
     })
-    injectWind(fmat, wind.uniforms, 0.10, 1.6)
-    this.flowers = new THREE.InstancedMesh(crossQuads(0.5, 0.5, 2), fmat, this.capF)
+    injectWind(this.flowerMat, wind.uniforms, 0.10, 1.6)
+    this.flowerGeo = crossQuads(0.5, 0.5, 2)
+    this.flowers = new THREE.InstancedMesh(this.flowerGeo, this.flowerMat, this.capF)
 
     for (const m of [this.tufts, this.flowers]) {
       m.frustumCulled = false
@@ -737,23 +708,34 @@ class GrassField {
       m.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
       this.group.add(m)
     }
-    // Grass receives shadows — tree shadows fall on grass correctly
     this.tufts.receiveShadow = true
     this.flowers.receiveShadow = true
-    // Manual instanceColor allocation for perf (avoids three.js realloc on first setColorAt)
     this.tufts.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(this.capT * 3), 3)
     this.flowers.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(this.capF * 3), 3)
   }
 
+  dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
+    this.tufts.dispose()
+    this.flowers.dispose()
+    this.tuftGeo.dispose()
+    this.flowerGeo.dispose()
+    this.tuftMat.dispose()
+    this.flowerMat.dispose()
+    this.tuftTex.dispose()
+    this.flowerTex.dispose()
+    this.group.clear()
+  }
+
   setSeason(s: Season): void {
-    // Applied to material.color so instanceColor × material.color = final
-    // Slight warm shift in autumn, cool in winter
     const t = SEASON_TINT[s]
     ;(this.tufts.material as THREE.MeshLambertMaterial).color.copy(t)
     ;(this.flowers.material as THREE.MeshLambertMaterial).color.copy(t)
   }
 
   update(camX: number, camZ: number, agl: number, dt: number, sky: SkyState, time: number, density: number): void {
+    if (this.disposed) return
     const active = agl < 70 && density > 0.05
     this.group.visible = active
     if (!active) return
@@ -773,9 +755,7 @@ class GrassField {
         }
       }
     }
-    // Sky-driven grass tint — subtle atmospheric shift at dusk/dawn
     const lam = this.tufts.material as THREE.MeshLambertMaterial
-    // Blend sun tint into grass (slight) — sun color is a hint about time-of-day
     const sunTint = sky.sunColor
     const dusk = sky.twilight
     lam.emissive.setRGB(
@@ -787,6 +767,7 @@ class GrassField {
   }
 
   private commit(): void {
+    if (this.disposed) return
     this.tufts.instanceMatrix.array.set(this.bufT.subarray(0, this.nT * 16))
     ;(this.tufts.instanceColor!.array as Float32Array).set(this.colT.subarray(0, this.nT * 3))
     this.tufts.count = this.nT
@@ -801,6 +782,7 @@ class GrassField {
   }
 
   private *generate(camX: number, camZ: number): Generator<void, void, void> {
+    if (this.disposed) return
     const rgb: [number, number, number] = [0, 0, 0]
     const gx0 = Math.floor((camX - GRASS_RADIUS) / GRASS_STEP)
     const gx1 = Math.floor((camX + GRASS_RADIUS) / GRASS_STEP)
@@ -817,7 +799,10 @@ class GrassField {
     for (let gz = gz0; gz <= gz1; gz += 1) {
       for (let gx = gx0; gx <= gx1; gx += 1) {
         counter += 1
-        if (counter % 900 === 0) yield
+        if (counter % 900 === 0) {
+          if (this.disposed) return
+          yield
+        }
         const x = (gx + hash2(gx, gz, 61)) * GRASS_STEP
         const z = (gz + hash2(gx, gz, 62)) * GRASS_STEP
         if (isUrbanAt(x, z)) continue
@@ -825,7 +810,6 @@ class GrassField {
         const dz = z - camZ
         const d = Math.hypot(dx, dz)
         if (d > GRASS_RADIUS) continue
-        // Distance fade — dissolve without pop
         const fade = 1 - d / GRASS_RADIUS
         if (hash2(gx, gz, 63) > Math.min(1, fade * 1.7) * this.densityScale) continue
         const h = heightAt(x, z)
@@ -850,7 +834,6 @@ class GrassField {
           this.colT[nT * 3 + 2] = Math.min(1, rgb[2] * k + 0.02)
           nT += 1
         }
-        // Flower patches
         const patch = noise2(x * 0.045 + 5, z * 0.045, 12)
         if (patch > 0.25 && nF < this.capF && hash2(gx, gz, 69) < 0.5 && h > 1.5) {
           const fc = FLOWER_COLORS[Math.floor(hash2(Math.floor(x / 9), Math.floor(z / 9), 70) * FLOWER_COLORS.length)]
