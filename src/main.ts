@@ -8,7 +8,19 @@ import { SAVE_KEY, SaveStore, type SaveData } from './engine/save'
 import type { Game } from './game/game'
 import { Ui } from './ui/ui'
 
-async function boot(): Promise<void> {
+type Booted = {
+  game: Game
+  loop: GameLoop
+  ui: Ui
+  input: Input
+  audio: Audio
+  save: SaveStore
+  cleanup: () => void
+}
+
+let booted: Booted | undefined
+
+async function boot(): Promise<Booted> {
   const canvas = document.querySelector<HTMLCanvasElement>('#game')!
   const root = document.getElementById('ui')!
   const firstRun = safeGet(SAVE_KEY) === null
@@ -143,7 +155,8 @@ async function boot(): Promise<void> {
   ui.refreshTitle()
   ui.show('title')
 
-  window.addEventListener('keydown', e => {
+  // ---- Listeners globais: guardamos referências para remover no dispose ----
+  const onKeyDown = (e: KeyboardEvent) => {
     if (e.code !== 'Escape' || e.repeat) return
     const sub = ui.screen === 'settings' || ui.screen === 'controls' || ui.screen === 'journal' || ui.screen === 'birds'
     if (g.state === 'playing') {
@@ -159,20 +172,61 @@ async function boot(): Promise<void> {
       input.consume('pause')
       ui.back()
     }
-  })
-  document.addEventListener('pointerlockchange', () => {
+  }
+  const onPointerLockChange = () => {
     // O navegador solta o mouse ao apertar Esc sem entregar a tecla: tratamos como pausa.
     if (!document.pointerLockElement && g.state === 'playing' && input.method === 'keyboard') {
       pause()
     }
-  })
-  document.addEventListener('visibilitychange', () => {
+  }
+  const onVisibility = () => {
     if (document.hidden) pause()
-  })
-  canvas.addEventListener('click', () => {
+  }
+  const onCanvasClick = () => {
     if (g.state === 'playing') input.lockPointer()
-  })
-  ;(window as unknown as { __game: unknown }).__game = { game: g, ui, input, save, audio }
+  }
+
+  window.addEventListener('keydown', onKeyDown)
+  document.addEventListener('pointerlockchange', onPointerLockChange)
+  document.addEventListener('visibilitychange', onVisibility)
+  canvas.addEventListener('click', onCanvasClick)
+
+  const cleanup = () => {
+    window.removeEventListener('keydown', onKeyDown)
+    document.removeEventListener('pointerlockchange', onPointerLockChange)
+    document.removeEventListener('visibilitychange', onVisibility)
+    canvas.removeEventListener('click', onCanvasClick)
+    try {
+      loop?.stop()
+    } catch {
+      /* ignore */
+    }
+    try {
+      input.unlockPointer()
+    } catch {
+      /* ignore */
+    }
+    try {
+      g.dispose?.()
+    } catch (err) {
+      console.warn('game.dispose falhou:', err)
+    }
+    try {
+      input.dispose?.()
+    } catch {
+      /* ignore */
+    }
+    try {
+      audio.dispose?.()
+    } catch {
+      /* ignore */
+    }
+    root.innerHTML = ''
+  }
+
+  const result: Booted = { game: g, loop, ui, input, audio, save, cleanup }
+  ;(window as unknown as { __game: Booted }).__game = result
+  return result
 }
 
 function safeGet(key: string): string | null {
@@ -183,13 +237,29 @@ function safeGet(key: string): string | null {
   }
 }
 
-boot().catch(err => {
-  console.error(err)
-  const el = document.getElementById('ui')
-  const webgl = /webgl/i.test(String((err as Error)?.message ?? err))
-  if (el) {
-    const i18n = new I18n()
-    el.innerHTML = `<div class="fatal" role="alert"><div class="fatal-inner"><img class="fatal-mark" src="./favicon.svg" alt="" /><p>${i18n.t(webgl ? 'fatal_webgl' : 'fatal')}</p><button class="btn primary" type="button">${i18n.t('retry')}</button></div></div>`
-    el.querySelector('button')?.addEventListener('click', () => location.reload())
-  }
-})
+// ---- HMR / reload safety ----------------------------------------------------------------
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    try {
+      booted?.cleanup()
+    } catch (err) {
+      console.warn('HMR cleanup falhou:', err)
+    }
+    booted = undefined
+  })
+}
+
+boot()
+  .then(b => {
+    booted = b
+  })
+  .catch(err => {
+    console.error(err)
+    const el = document.getElementById('ui')
+    const webgl = /webgl/i.test(String((err as Error)?.message ?? err))
+    if (el) {
+      const i18n = new I18n()
+      el.innerHTML = `<div class="fatal" role="alert"><div class="fatal-inner"><img class="fatal-mark" src="./favicon.svg" alt="" /><p>${i18n.t(webgl ? 'fatal_webgl' : 'fatal')}</p><button class="btn primary" type="button">${i18n.t('retry')}</button></div></div>`
+      el.querySelector('button')?.addEventListener('click', () => location.reload())
+    }
+  })
