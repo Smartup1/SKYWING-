@@ -85,14 +85,14 @@ export class Game {
   hour: number
   private readonly sky = createSkyState()
   private readonly skyDome = new Sky()
-  private terrain!: TerrainManager
-  private water!: Water
-  private cities!: Cities
-  private forest!: Forest
-  private clouds!: Clouds
-  private collectibles!: Collectibles
-  private fauna!: Fauna
-  private fx!: Fx
+  private terrain?: TerrainManager
+  private water?: Water
+  private cities?: Cities
+  private forest?: Forest
+  private clouds?: Clouds
+  private collectibles?: Collectibles
+  private fauna?: Fauna
+  private fx?: Fx
   private readonly sun = new THREE.DirectionalLight(0xffffff, 3)
   private readonly moon = new THREE.DirectionalLight(0x8fa6ff, 0.3)
   private readonly hemi = new THREE.HemisphereLight(0xaad0ff, 0x5a4a30, 0.8)
@@ -116,13 +116,16 @@ export class Game {
   private hintsShown = new Set<string>()
   private skimFxTimer = 0
   private crashCooldown = 0
+  /** Duração do último passo de simulação — usado para decrementar timers corretamente. */
+  private lastStepDt = 1 / 60
   readonly score = new Score()
   readonly missions = new MissionBoard(CITY_SITES.length)
-  private hawks!: HawkDirector
+  private hawks?: HawkDirector
   private readonly visitedPerches = new Set<number>()
   private readonly citiesSeen = new Set<number>()
   private lastSite = -1
   private hitFlash = 0
+  private disposed = false
   private readonly env: FlightEnv = {
     surface: surfaceAt,
     wind: (out, x, y, z) => this.atm.sample(out, x, y, z),
@@ -160,6 +163,7 @@ export class Game {
 
   /** Constrói o mundo inteiro em etapas, informando progresso (0–1) e a legenda atual. */
   async init(onProgress: (p: number, label: string) => void): Promise<void> {
+    if (this.disposed) return
     const t = (key: Parameters<I18n['t']>[0]) => this.i18n.t(key)
     this.terrain = new TerrainManager()
     this.scene.add(this.terrain.group)
@@ -168,7 +172,9 @@ export class Game {
 
     onProgress(0.02, t('loading_terrain'))
     await this.terrain.buildAll(START.x, START.z, p => onProgress(0.02 + p * 0.28, t('loading_terrain')))
+    if (this.disposed) return
     await this.water.bake(p => onProgress(0.3 + p * 0.1, t('loading_terrain')))
+    if (this.disposed) return
 
     this.cities = new Cities()
     this.scene.add(this.cities.group)
@@ -176,6 +182,7 @@ export class Game {
     this.forest = new Forest()
     this.scene.add(this.forest.group)
     await this.forest.load(this.assets, p => onProgress(0.4 + p * 0.35, t('loading_trees')))
+    if (this.disposed) return
     this.forest.forceRebuild(START.x, START.z, this.densityFor(this.quality))
 
     onProgress(0.78, t('loading_life'))
@@ -194,14 +201,19 @@ export class Game {
     )
     this.fauna = new Fauna(this.atm, {
       onCall: (pan, kind) => {
+        if (this.disposed) return
         const n = kind === 'scatter' ? 5 : 3
-        for (let i = 0; i < n; i += 1) window.setTimeout(() => this.audio.flockCall(pan + (Math.random() - 0.5) * 0.4), i * 90)
+        for (let i = 0; i < n; i += 1) {
+          window.setTimeout(() => {
+            if (!this.disposed) this.audio.flockCall(pan + (Math.random() - 0.5) * 0.4)
+          }, i * 90)
+        }
       },
     })
     this.scene.add(this.fauna.mesh)
     this.hawks = new HawkDirector(
       this.fauna.hunter,
-      { ground: surfaceAt, roof: (x, z) => this.cities.colliders.roofAt(x, z) },
+      { ground: surfaceAt, roof: (x, z) => (this.cities ? this.cities.colliders.roofAt(x, z) : -Infinity) },
       {
         warn: pan => this.onHawkWarn(pan),
         stoop: pan => this.audio.hawkScreech(pan, true),
@@ -218,11 +230,32 @@ export class Game {
     this.resetFlight(false)
     this.applySky(0)
     onProgress(0.94, t('loading_life'))
+    if (this.disposed) return
     // Pré-compila shaders para evitar engasgo no primeiro quadro.
     this.rig.update(0.016, this.camTarget(), { x: 0, y: 0 }, this.renderer.canvas.clientWidth, this.renderer.canvas.clientHeight, true)
     this.renderer.gl.compile(this.scene, this.rig.camera)
     onProgress(1, t('loading'))
     this.setState('title')
+  }
+
+  /**
+   * Libera todos os recursos: geometrias, materiais, listeners, timers.
+   * Seguro chamar mais de uma vez.
+   */
+  dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
+    try { this.terrain?.dispose?.() } catch { /* ignore */ }
+    try { this.water?.dispose?.() } catch { /* ignore */ }
+    try { this.cities?.dispose?.() } catch { /* ignore */ }
+    try { this.forest?.dispose?.() } catch { /* ignore */ }
+    try { this.clouds?.dispose?.() } catch { /* ignore */ }
+    try { this.collectibles?.dispose?.() } catch { /* ignore */ }
+    try { this.fauna?.dispose?.() } catch { /* ignore */ }
+    try { this.fx?.dispose?.() } catch { /* ignore */ }
+    try { this.skyDome.dispose?.() } catch { /* ignore */ }
+    try { this.bird.dispose() } catch { /* ignore */ }
+    this.scene.clear()
   }
 
   private densityFor(q: Quality): number {
@@ -270,14 +303,14 @@ export class Game {
       tuning.activate('run')
       const known = this.save.data.discoveries as DiscoveryId[]
       this.run = createRun(known)
-      this.collectibles.resetSeeds(CONFIG.seeds.count)
-      this.collectibles.restoreFound(
+      this.collectibles?.resetSeeds(CONFIG.seeds.count)
+      this.collectibles?.restoreFound(
         known.filter(d => d.startsWith('nest')).map(d => Number(d.slice(4))),
         known.includes('summit'),
       )
-      this.run.seedsGoal = this.collectibles.total
+      this.run.seedsGoal = this.collectibles?.total ?? CONFIG.seeds.count
     } else {
-      this.run.seedsGoal = this.collectibles.total
+      this.run.seedsGoal = this.collectibles?.total ?? CONFIG.seeds.count
     }
     const y = surfaceAt(START.x, START.z) + 60
     this.flight.reset(START.x, y, START.z, START.yaw, CONFIG.flight.cruiseSpeed * this.flight.profile.cruiseSpeed + 1)
@@ -292,6 +325,7 @@ export class Game {
       this.citiesSeen.clear()
       this.lastSite = -1
       this.hitFlash = 0
+      this.crashCooldown = 0
       this.missions.allowHawk = this.save.data.hawks
       this.missions.reset()
       this.cities?.setVisited([])
@@ -310,7 +344,9 @@ export class Game {
   // --- Simulação em passo fixo ----------------------------------------------------------------
 
   step(dt: number): void {
+    if (this.disposed) return
     if (this.state === 'loading' || this.state === 'paused') return
+    this.lastStepDt = dt
     this.time += dt
     this.atm.update(dt)
     this.input.update(dt)
@@ -323,8 +359,8 @@ export class Game {
     this.currPos.copy(this.flight.pos)
     _euler.set(this.flight.pitch, this.flight.yaw, this.flight.roll, 'YXZ')
     this.currQuat.setFromEuler(_euler)
-    this.handleFlightEvents()
-    this.fauna.update(dt, this.time, this.flight.pos, this.flight.vel, this.flight.forward)
+    this.handleFlightEvents(dt)
+    this.fauna?.update(dt, this.time, this.flight.pos, this.flight.vel, this.flight.forward)
     if (this.state === 'playing') {
       this.gameplay(dt)
       this.updateHawks(dt)
@@ -368,7 +404,7 @@ export class Game {
 
   private hourAuto = CONFIG.time.startHour
 
-  private handleFlightEvents(): void {
+  private handleFlightEvents(dt: number): void {
     const f = this.flight
     const overWater = heightAt(f.pos.x, f.pos.z) < WATER_LEVEL - 0.1
     for (const e of this.events) {
@@ -377,27 +413,27 @@ export class Game {
           this.audio.flap(e.power)
           break
         case 'takeoff':
-          this.fx.burst(this.tmpV.copy(f.pos).setY(f.pos.y - 0.2), 'dust', 0.8)
-          this.fx.burst(f.pos, 'feather', 0.3)
+          this.fx?.burst(this.tmpV.copy(f.pos).setY(f.pos.y - 0.2), 'dust', 0.8)
+          this.fx?.burst(f.pos, 'feather', 0.3)
           break
         case 'bump':
           this.audio.bump()
-          this.fx.burst(f.pos, 'feather', 0.4)
+          this.fx?.burst(f.pos, 'feather', 0.4)
           break
         case 'land':
           this.audio.land()
           if (overWater) {
             this.audio.splash()
-            this.fx.burst(f.pos, 'spray', 1.2)
+            this.fx?.burst(f.pos, 'spray', 1.2)
           } else {
-            this.fx.burst(f.pos, 'dust', 0.8)
+            this.fx?.burst(f.pos, 'dust', 0.8)
           }
           if (this.state === 'playing') this.onLanded(e.hs, e.down)
           break
         case 'crash':
           this.audio.crash()
-          this.fx.burst(f.pos, 'feather', 1.4)
-          this.fx.burst(f.pos, overWater ? 'spray' : 'dust', 1.2)
+          this.fx?.burst(f.pos, 'feather', 1.4)
+          this.fx?.burst(f.pos, overWater ? 'spray' : 'dust', 1.2)
           if (overWater) this.audio.splash()
           if (this.state === 'playing' && this.crashCooldown <= 0) {
             this.ui.toast(this.i18n.t('toast_crash'), 'warn')
@@ -405,23 +441,23 @@ export class Game {
           }
           break
         case 'skim':
-          this.skimTrail(overWater, e.speed)
+          this.skimTrail(overWater, e.speed, dt)
           break
         case 'stall':
           this.audio.stall()
           break
       }
     }
-    this.crashCooldown -= 1 / 60
+    if (this.crashCooldown > 0) this.crashCooldown = Math.max(0, this.crashCooldown - dt)
   }
 
-  private skimTrail(overWater: boolean, speed: number): void {
-    this.skimFxTimer -= 1 / 60
+  private skimTrail(overWater: boolean, speed: number, dt: number): void {
+    this.skimFxTimer -= dt
     if (this.skimFxTimer > 0) return
     this.skimFxTimer = 0.07
     const p = this.tmpV.copy(this.flight.pos)
     p.y = surfaceAt(p.x, p.z) + 0.1
-    this.fx.trail(p, this.flight.vel, overWater ? 'spray' : 'dust')
+    this.fx?.trail(p, this.flight.vel, overWater ? 'spray' : 'dust')
     if (overWater && Math.random() < 0.15) this.audio.splash()
     void speed
   }
@@ -432,7 +468,7 @@ export class Game {
     this.run.distance += f.vel.length() * dt
     this.run.maxAltitude = Math.max(this.run.maxAltitude, f.pos.y)
     this.run.maxSpeed = Math.max(this.run.maxSpeed, f.vel.length())
-    this.collectibles.update(dt, this.viewScale(), f.pos, this.sky.daylight)
+    this.collectibles?.update(dt, this.viewScale(), f.pos, this.sky.daylight)
     this.atm.sample(this.airVel, f.pos.x, f.pos.y, f.pos.z)
     this.vario += (f.vel.y - this.vario) * Math.min(1, dt * 3)
     this.score.update(dt)
@@ -453,7 +489,7 @@ export class Game {
       if (this.skimTime > 1.4 && discover(this.run, 'skim')) this.onDiscovery('skim')
       if (f.agl < 2.2 && Math.random() < dt * 5) {
         const p = this.tmpV.set(f.pos.x, WATER_LEVEL + 0.05, f.pos.z)
-        this.fx.burst(p, 'spray', 0.25, f.vel)
+        this.fx?.burst(p, 'spray', 0.25, f.vel)
       }
     } else {
       this.skimTime = Math.max(0, this.skimTime - dt * 0.5)
@@ -478,7 +514,7 @@ export class Game {
     }
 
     // Voar com o bando.
-    if (this.fauna.companions >= 3) {
+    if (this.fauna && this.fauna.companions >= 3) {
       this.run.flockSeconds += dt
       if (this.run.flockSeconds >= 6 && discover(this.run, 'flock')) this.onDiscovery('flock')
     } else {
@@ -503,7 +539,7 @@ export class Game {
     const pts = this.award(100, true)
     this.noteMission({ type: 'seed' })
     this.audio.seed()
-    this.fx.burst(p, 'seed', 1)
+    this.fx?.burst(p, 'seed', 1)
     this.save.update({ totalSeeds: this.save.data.totalSeeds + 1, bestSeeds: Math.max(this.save.data.bestSeeds, this.run.seeds) })
     this.flight.stamina = Math.min(CONFIG.stamina.max, this.flight.stamina + 6)
     if (this.run.seeds >= this.run.seedsGoal) {
@@ -519,14 +555,14 @@ export class Game {
     const id = `nest${index}` as DiscoveryId
     if (!discover(this.run, id)) return
     this.audio.nestChicks()
-    this.fx.burst(p, 'sparkle', 1.4)
+    this.fx?.burst(p, 'sparkle', 1.4)
     this.onDiscovery(id)
   }
 
   private onSummit(p: THREE.Vector3): void {
     if (this.state !== 'playing') return
     if (!discover(this.run, 'summit')) return
-    this.fx.burst(p, 'sparkle', 2)
+    this.fx?.burst(p, 'sparkle', 2)
     this.onDiscovery('summit')
   }
 
@@ -577,6 +613,7 @@ export class Game {
   /** Poleiro sob o pássaro recém-pousado (mesma altura e dentro do anel). */
   private perchUnder() {
     const f = this.flight
+    if (!this.cities) return null
     for (const p of this.cities.perches) {
       if (Math.hypot(f.pos.x - p.x, f.pos.z - p.z) <= p.radius + 1.2 && Math.abs(f.floorY - p.y) < 0.8) return p
     }
@@ -589,10 +626,10 @@ export class Game {
     const perch = this.perchUnder()
     if (perch) {
       f.stamina = CONFIG.stamina.max
-      this.fx.burst(this.tmpV.set(perch.x, perch.y + 0.5, perch.z), 'sparkle', 1.2)
+      this.fx?.burst(this.tmpV.set(perch.x, perch.y + 0.5, perch.z), 'sparkle', 1.2)
       if (!this.visitedPerches.has(perch.id)) {
         this.visitedPerches.add(perch.id)
-        this.cities.setVisited(this.visitedPerches)
+        this.cities?.setVisited(this.visitedPerches)
         const pts = this.award(500, true)
         this.audio.perch()
         this.ui.toast(this.i18n.t('toast_perch', { city: CITY_SITES[perch.site].name, pts }), 'good')
@@ -621,6 +658,7 @@ export class Game {
   }
 
   private updateHawks(dt: number): void {
+    if (!this.hawks) return
     const f = this.flight
     const site = citySiteAt(f.pos.x, f.pos.z, 1)
     const view: PlayerView = {
@@ -629,7 +667,7 @@ export class Game {
       forward: f.forward,
       grounded: f.grounded,
       agl: f.agl,
-      withFlock: this.fauna.companions >= 3,
+      withFlock: (this.fauna?.companions ?? 0) >= 3,
       sheltered: f.grounded && site >= 0,
       inCover: site >= 0 && f.agl < 14,
       assisted: f.assisted,
@@ -638,6 +676,7 @@ export class Game {
   }
 
   private onHawkWarn(pan: number): void {
+    if (this.disposed) return
     this.audio.hawkScreech(pan)
     this.ui.toast(this.i18n.t('toast_hawk_warn'), 'warn')
     if (!this.hintsShown.has('hawk')) {
@@ -647,6 +686,7 @@ export class Game {
   }
 
   private onDodge(): void {
+    if (this.disposed) return
     this.audio.dodge()
     const pts = this.award(400, true)
     this.ui.toast(this.i18n.t('toast_dodge', { pts }), 'good')
@@ -655,9 +695,10 @@ export class Game {
   }
 
   private onHawkHit(dir: THREE.Vector3): void {
+    if (this.disposed) return
     this.audio.crash()
     this.audio.hawkScreech(0, true)
-    this.fx.burst(this.flight.pos, 'feather', 2)
+    this.fx?.burst(this.flight.pos, 'feather', 2)
     this.flight.knock(dir.x, dir.z, 6)
     this.score.breakCombo()
     this.score.penalty(150)
@@ -666,6 +707,7 @@ export class Game {
   }
 
   private onHawkEscaped(reason: EscapeReason): void {
+    if (this.disposed) return
     const pts = this.award(800, true)
     this.audio.discover()
     this.ui.toast(this.i18n.t(`toast_escape_${reason}` as 'toast_escape_timeout', { pts }), 'good')
@@ -713,6 +755,7 @@ export class Game {
   }
 
   render(alpha: number, frameSeconds: number): void {
+    if (this.disposed) return
     if (this.state === 'loading') return
     const dt = Math.min(frameSeconds, 0.1)
     // Ações de uma batida (câmera, cruzeiro) — só durante o voo.
@@ -776,14 +819,14 @@ export class Game {
     const agl = Math.max(0, cam.position.y - surfaceAt(cam.position.x, cam.position.z))
     this.drift.set(this.atm.windSpeed * Math.cos(this.atm.windAngle) * this.atm.time * 0.6, this.atm.windSpeed * Math.sin(this.atm.windAngle) * this.atm.time * 0.6)
     this.skyDome.update(this.sky, cam.position, this.time)
-    this.clouds.update(this.sky, cam, this.drift, this.renderer.gl.domElement.height)
-    this.terrain.update(cam.position.x, cam.position.z, 3)
-    this.water.update(this.sky, cam.position, this.time)
-    this.cities.update(this.sky.daylight, dt, this.time)
-    this.forest.update(cam.position.x, cam.position.z, agl, dt, this.sky, this.time, this.densityFor(this.quality))
-    this.collectibles.update(0, this.viewScale(), this.renderPos, this.sky.daylight)
+    this.clouds?.update(this.sky, cam, this.drift, this.renderer.gl.domElement.height)
+    this.terrain?.update(cam.position.x, cam.position.z, 3)
+    this.water?.update(this.sky, cam.position, this.time)
+    this.cities?.update(this.sky.daylight, dt, this.time)
+    this.forest?.update(cam.position.x, cam.position.z, agl, dt, this.sky, this.time, this.densityFor(this.quality))
+    this.collectibles?.update(0, this.viewScale(), this.renderPos, this.sky.daylight)
     const wind = this.tmpV.set(this.atm.windSpeed * Math.cos(this.atm.windAngle), 0, this.atm.windSpeed * Math.sin(this.atm.windAngle))
-    this.fx.update(dt, cam, this.renderer.gl.domElement.height, this.sky, this.time, wind, f.vel, this.state === 'playing' ? f.vel.length() : 0)
+    this.fx?.update(dt, cam, this.renderer.gl.domElement.height, this.sky, this.time, wind, f.vel, this.state === 'playing' ? f.vel.length() : 0)
 
     this.updateAudio(dt)
     if (this.state === 'playing') {
@@ -797,6 +840,7 @@ export class Game {
   }
 
   private updateAudio(dt: number): void {
+    if (!this.audio.ready) return
     const f = this.flight
     const th = this.atm.thermalAt(f.pos.x, f.pos.z)
     this.audio.update(dt, {
@@ -814,7 +858,7 @@ export class Game {
 
   private buildHud(): HudData {
     const f = this.flight
-    const near = this.collectibles.nearestSeed(f.pos)
+    const near = this.collectibles?.nearestSeed(f.pos) ?? null
     let nearestSeed: HudData['nearestSeed'] = null
     if (near) {
       const dirYaw = Math.atan2(-near.dir.x, -near.dir.z)
@@ -822,18 +866,18 @@ export class Game {
       nearestSeed = { meters: Math.round(near.dist), bearing: rel, pitch: Math.asin(near.dir.y) }
     }
     const warnings: Warning[] = []
-    if (this.hawks.phase === 'stoop') warnings.push('hawk')
+    if (this.hawks && this.hawks.phase === 'stoop') warnings.push('hawk')
     if (f.stalled && !f.grounded) warnings.push('stall')
     if (Math.hypot(f.pos.x, f.pos.z) > CONFIG.world.softRadius) warnings.push('edge')
     if (f.stamina < 18 && !f.grounded) warnings.push('tired')
     if (f.pos.y > CONFIG.flight.ceiling - 12) warnings.push('ceiling')
     let hawk: HudData['hawk'] = null
-    if (this.hawks.phase !== 'idle' && this.fauna.hunter.active) {
+    if (this.hawks && this.hawks.phase !== 'idle' && this.fauna?.hunter.active) {
       const d = this.tmpV.copy(this.fauna.hunter.pos).sub(f.pos)
       const meters = d.length()
       const dirYaw = Math.atan2(-d.x, -d.z)
       hawk = {
-        phase: this.hawks.phase,
+        phase: this.hawks.phase as 'stalk' | 'stoop' | 'recover',
         meters: Math.round(meters),
         bearing: Math.atan2(Math.sin(dirYaw - f.yaw), Math.cos(dirYaw - f.yaw)),
         pitch: Math.asin(THREE.MathUtils.clamp(d.y / Math.max(meters, 1), -1, 1)),
@@ -841,7 +885,7 @@ export class Game {
       }
     }
     let perch: HudData['perch'] = null
-    const np = this.cities.nearestPerch(f.pos.x, f.pos.y, f.pos.z)
+    const np = this.cities?.nearestPerch(f.pos.x, f.pos.y, f.pos.z) ?? null
     if (np && np.dist < 450 && !f.grounded) {
       const dirYaw = Math.atan2(-(np.perch.x - f.pos.x), -(np.perch.z - f.pos.z))
       perch = {
@@ -901,6 +945,7 @@ export class Game {
     this.flight.setProfile(this.bird.species.flight)
     this.scene.add(this.bird.group)
     this.save.update({ birdId: id })
+    this.applyQuality(this.quality)
     this.resetFlight(false)
   }
 
