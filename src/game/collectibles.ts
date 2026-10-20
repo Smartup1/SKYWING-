@@ -13,16 +13,9 @@ export type CollectEvents = {
   onSummit(pos: THREE.Vector3): void
 }
 
-// ============================================================================
-// Tuning constants (exported so game designers can tweak)
-// ============================================================================
-
 export const SEED_CONFIG = {
-  /** Distância (m) a partir da qual a seed começa a ser atraída ao jogador. */
   attractRadius: 8,
-  /** Tempo (s) da animação de pop após coleta. */
   popTime: 0.28,
-  /** Tamanho base do glow (unidades do shader). */
   glowSize: 5,
 } as const
 
@@ -36,10 +29,6 @@ export const SUMMIT_CONFIG = {
   glowSize: 40,
 } as const
 
-// ============================================================================
-// Shaders
-// ============================================================================
-
 const GLOW_VERT = /* glsl */ `
 attribute float aSize;
 attribute float aSeed;
@@ -52,12 +41,9 @@ varying vec3 vTint;
 void main() {
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
   gl_Position = projectionMatrix * mv;
-  // Distância em metros (assumindo câmera em perspectiva; -mv.z > 0)
   float dist = max(-mv.z, 0.1);
-  // Pulso único por seed: frequência um pouco diferente para cada uma
   float freq = 2.0 + aSeed * 1.3;
   float pulse = 0.75 + 0.25 * sin(uTime * freq + aSeed * 30.0);
-  // Escala com distância: longe → menor, mas com piso para não sumir
   float distScale = uScale / dist;
   float minSize = 2.5;
   gl_PointSize = clamp(aSize * pulse * distScale, minSize, 160.0);
@@ -74,17 +60,12 @@ varying vec3 vTint;
 void main() {
   vec2 pc = gl_PointCoord - 0.5;
   float r = length(pc) * 2.0;
-  // Núcleo + halo suave
   float core = pow(max(1.0 - r, 0.0), 3.0);
   float halo = pow(max(1.0 - r, 0.0), 1.2) * 0.35;
   float a = (core + halo) * 0.9 * vA;
   gl_FragColor = vec4(uColor * vTint * 1.05, a);
 }
 `
-
-// ============================================================================
-// Seed placement
-// ============================================================================
 
 /** Posições determinísticas das sementes: trilhas curvas com altitudes variadas e rasantes no lago. */
 export function seedPositions(count: number): THREE.Vector3[] {
@@ -112,8 +93,6 @@ export function seedPositions(count: number): THREE.Vector3[] {
       out.push(new THREE.Vector3(x, surfaceAt(x, z) + agl, z))
     }
   }
-  // Fallback: preencher o resto com um padrão espiral determinístico.
-  // Garante spacing mínimo para evitar pickups sobrepostos.
   const MIN_SPACING = 12
   const minSpacingSq = MIN_SPACING * MIN_SPACING
   let attempt = 0
@@ -124,7 +103,6 @@ export function seedPositions(count: number): THREE.Vector3[] {
     const x = Math.cos(angle) * radius
     const z = Math.sin(angle) * radius
     if (isUrbanAt(x, z)) continue
-    // Evita colocar uma seed em cima de outra
     let conflict = false
     for (const p of out) {
       const dx = p.x - x
@@ -158,7 +136,6 @@ export function nestSites(): THREE.Vector3[] {
       found = new THREE.Vector3(x, h, z)
     }
     if (!found) {
-      // Fallback: busca em espiral, pulando áreas urbanas
       for (let attempt = 0; attempt < 400 && !found; attempt += 1) {
         const a = hash2(attempt, s, 313) * Math.PI * 2
         const r = 300 + attempt * 8
@@ -169,7 +146,6 @@ export function nestSites(): THREE.Vector3[] {
         if (h < 2) continue
         found = new THREE.Vector3(x, h, z)
       }
-      // Último recurso: qualquer lugar não-urbano perto da origem
       if (!found) {
         let fx = 0, fz = 0
         for (let k = 0; k < 20; k += 1) {
@@ -190,24 +166,16 @@ export function nestSites(): THREE.Vector3[] {
   return sites
 }
 
-// ============================================================================
-// Collectibles
-// ============================================================================
-
-// Estados de coleta
 const STATE_DEAD = 0
 const STATE_ALIVE = 1
 const STATE_DYING = 2
 
-// Cores por nest — variedade visual. Multiplicadas por uColor no shader.
 const NEST_TINTS: THREE.Color[] = [
-  new THREE.Color(1.0, 0.85, 0.55), // dourado
-  new THREE.Color(0.85, 1.0, 0.75), // verde-esmeralda
-  new THREE.Color(1.0, 0.75, 0.85), // rosa-pérola
-  new THREE.Color(0.80, 0.90, 1.0), // azul-gelo
+  new THREE.Color(1.0, 0.85, 0.55),
+  new THREE.Color(0.85, 1.0, 0.75),
+  new THREE.Color(1.0, 0.75, 0.85),
+  new THREE.Color(0.80, 0.90, 1.0),
 ]
-
-const _white = new THREE.Color(1, 1, 1)
 
 export class Collectibles {
   readonly group = new THREE.Group()
@@ -220,19 +188,32 @@ export class Collectibles {
   private dieT = new Float32Array(0)
 
   private readonly seedMesh: THREE.InstancedMesh
+  private readonly seedGeom: THREE.OctahedronGeometry
+  private readonly seedMat: THREE.MeshBasicMaterial
   private readonly glow: THREE.Points
+  private readonly glowGeom: THREE.BufferGeometry
   private readonly glowMat: THREE.ShaderMaterial
   private readonly glowSize: Float32Array
   private readonly nestGlow: THREE.Points
+  private readonly nestGlowGeom: THREE.BufferGeometry
   private readonly summitGlow: THREE.Points
+  private readonly summitGlowGeom: THREE.BufferGeometry
   private readonly nestFound = new Set<number>()
   private readonly ring: THREE.Mesh
+  private readonly ringGeom: THREE.TorusGeometry
+  private readonly ringMat: THREE.MeshBasicMaterial
   private readonly beacon: THREE.Mesh
+  private readonly beaconGeom: THREE.CylinderGeometry
+  private readonly beaconMat: THREE.ShaderMaterial
   private _summitFound = false
   private time = 0
   private readonly cap = 140
+  private disposed = false
 
-  // Scratch objects (zero allocations in hot path)
+  // Recursos externos (do Forest) — não dispor, só parar de usar.
+  private readonly externalGeoms = new Set<THREE.BufferGeometry>()
+  private readonly externalMats = new Set<THREE.Material>()
+
   private readonly _m = new THREE.Matrix4()
   private readonly _q = new THREE.Quaternion()
   private readonly _up = new THREE.Vector3(0, 1, 0)
@@ -243,28 +224,22 @@ export class Collectibles {
   private readonly _col = new THREE.Color()
 
   constructor(forest: Forest, private readonly events: CollectEvents) {
-    // ---------------------------------------------------------------------
-    // Seed mesh
-    // ---------------------------------------------------------------------
-    const geo = new THREE.OctahedronGeometry(0.55, 0).scale(0.75, 1.15, 0.75)
-    const mat = new THREE.MeshBasicMaterial({
+    this.seedGeom = new THREE.OctahedronGeometry(0.55, 0).scale(0.75, 1.15, 0.75)
+    this.seedMat = new THREE.MeshBasicMaterial({
       color: new THREE.Color().setRGB(2.4, 1.7, 0.45, THREE.LinearSRGBColorSpace),
       toneMapped: true,
     })
-    this.seedMesh = new THREE.InstancedMesh(geo, mat, this.cap)
+    this.seedMesh = new THREE.InstancedMesh(this.seedGeom, this.seedMat, this.cap)
     this.seedMesh.frustumCulled = false
     this.seedMesh.instanceColor = new THREE.InstancedBufferAttribute(
       new Float32Array(this.cap * 3).fill(1), 3,
     )
     this.group.add(this.seedMesh)
 
-    // ---------------------------------------------------------------------
-    // Seed glow (billboard points)
-    // ---------------------------------------------------------------------
     this.glowSize = new Float32Array(this.cap)
-    const gg = new THREE.BufferGeometry()
-    gg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(this.cap * 3), 3))
-    gg.setAttribute('aSize', new THREE.BufferAttribute(this.glowSize, 1))
+    this.glowGeom = new THREE.BufferGeometry()
+    this.glowGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(this.cap * 3), 3))
+    this.glowGeom.setAttribute('aSize', new THREE.BufferAttribute(this.glowSize, 1))
     const seedAttr = new Float32Array(this.cap)
     const seedTint = new Float32Array(this.cap * 3)
     for (let i = 0; i < this.cap; i += 1) {
@@ -273,8 +248,8 @@ export class Collectibles {
       seedTint[i * 3 + 1] = 1
       seedTint[i * 3 + 2] = 1
     }
-    gg.setAttribute('aSeed', new THREE.BufferAttribute(seedAttr, 1))
-    gg.setAttribute('aTint', new THREE.BufferAttribute(seedTint, 3))
+    this.glowGeom.setAttribute('aSeed', new THREE.BufferAttribute(seedAttr, 1))
+    this.glowGeom.setAttribute('aTint', new THREE.BufferAttribute(seedTint, 3))
 
     this.glowMat = new THREE.ShaderMaterial({
       vertexShader: GLOW_VERT,
@@ -288,19 +263,23 @@ export class Collectibles {
         uColor: { value: new THREE.Color(1, 0.66, 0.16) },
       },
     })
-    this.glow = new THREE.Points(gg, this.glowMat)
+    this.glow = new THREE.Points(this.glowGeom, this.glowMat)
     this.glow.frustumCulled = false
     this.glow.renderOrder = 9
     this.group.add(this.glow)
 
-    // ---------------------------------------------------------------------
-    // Nests (trees + nest meshes + glow)
-    // ---------------------------------------------------------------------
+    // Nests
     const sites = nestSites()
     const nestPos = new Float32Array(NEST_COUNT * 3)
     const nestSize = new Float32Array(NEST_COUNT)
     const nestSeed = new Float32Array(NEST_COUNT)
     const nestTint = new Float32Array(NEST_COUNT * 3)
+    this.externalGeoms.add(forest.broad.geometry)
+    this.externalGeoms.add(forest.nest.geometry)
+    this.externalGeoms.add(forest.rock.geometry)
+    this.externalMats.add(forest.broad.material)
+    this.externalMats.add(forest.nest.material)
+    this.externalMats.add(forest.rock.material)
     for (let i = 0; i < sites.length; i += 1) {
       const site = sites[i]
       const H = 34
@@ -330,19 +309,17 @@ export class Collectibles {
       nestTint[i * 3 + 1] = tint.g
       nestTint[i * 3 + 2] = tint.b
     }
-    const ng = new THREE.BufferGeometry()
-    ng.setAttribute('position', new THREE.BufferAttribute(nestPos, 3))
-    ng.setAttribute('aSize', new THREE.BufferAttribute(nestSize, 1))
-    ng.setAttribute('aSeed', new THREE.BufferAttribute(nestSeed, 1))
-    ng.setAttribute('aTint', new THREE.BufferAttribute(nestTint, 3))
-    this.nestGlow = new THREE.Points(ng, this.glowMat)
+    this.nestGlowGeom = new THREE.BufferGeometry()
+    this.nestGlowGeom.setAttribute('position', new THREE.BufferAttribute(nestPos, 3))
+    this.nestGlowGeom.setAttribute('aSize', new THREE.BufferAttribute(nestSize, 1))
+    this.nestGlowGeom.setAttribute('aSeed', new THREE.BufferAttribute(nestSeed, 1))
+    this.nestGlowGeom.setAttribute('aTint', new THREE.BufferAttribute(nestTint, 3))
+    this.nestGlow = new THREE.Points(this.nestGlowGeom, this.glowMat)
     this.nestGlow.frustumCulled = false
     this.nestGlow.renderOrder = 9
     this.group.add(this.nestGlow)
 
-    // ---------------------------------------------------------------------
-    // Summit (rock + ring + beacon glow)
-    // ---------------------------------------------------------------------
+    // Summit
     const s = findSummit()
     this.summit = new THREE.Vector3(s.x, s.h, s.z)
     const rock = new THREE.Mesh(forest.rock.geometry, forest.rock.material)
@@ -351,17 +328,15 @@ export class Collectibles {
     rock.castShadow = true
     this.group.add(rock)
 
-    this.ring = new THREE.Mesh(
-      new THREE.TorusGeometry(15, 0.8, 10, 48),
-      new THREE.MeshBasicMaterial({ color: new THREE.Color().setRGB(2.2, 1.6, 0.5, THREE.LinearSRGBColorSpace) }),
-    )
+    this.ringGeom = new THREE.TorusGeometry(15, 0.8, 10, 48)
+    this.ringMat = new THREE.MeshBasicMaterial({ color: new THREE.Color().setRGB(2.2, 1.6, 0.5, THREE.LinearSRGBColorSpace) })
+    this.ring = new THREE.Mesh(this.ringGeom, this.ringMat)
     this.summit.y = s.h + 34
     this.ring.position.copy(this.summit)
     this.group.add(this.ring)
 
-    // Far-visible beacon: a tall thin additive cylinder that pulses
-    const beaconGeo = new THREE.CylinderGeometry(1.2, 4.5, 140, 12, 1, true)
-    const beaconMat = new THREE.ShaderMaterial({
+    this.beaconGeom = new THREE.CylinderGeometry(1.2, 4.5, 140, 12, 1, true)
+    this.beaconMat = new THREE.ShaderMaterial({
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
@@ -373,7 +348,7 @@ export class Collectibles {
       vertexShader: /* glsl */ `
         varying float vY;
         void main() {
-          vY = position.y / 70.0 + 0.5; // 0..1
+          vY = position.y / 70.0 + 0.5;
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }
       `,
@@ -383,9 +358,7 @@ export class Collectibles {
         uniform float uTime;
         varying float vY;
         void main() {
-          // Pulso vertical
           float pulse = 0.75 + 0.25 * sin(uTime * 2.2 + vY * 6.0);
-          // Fade out no topo e na base
           float fadeTop = smoothstep(1.0, 0.3, vY);
           float fadeBot = smoothstep(0.0, 0.15, vY);
           float a = fadeTop * fadeBot * 0.28 * pulse;
@@ -393,25 +366,42 @@ export class Collectibles {
         }
       `,
     })
-    this.beacon = new THREE.Mesh(beaconGeo, beaconMat)
+    this.beacon = new THREE.Mesh(this.beaconGeom, this.beaconMat)
     this.beacon.position.set(s.x, s.h + 70, s.z)
     this.group.add(this.beacon)
 
-    // Beacon glow point (very large, always visible)
-    const sg = new THREE.BufferGeometry()
-    sg.setAttribute('position', new THREE.BufferAttribute(new Float32Array([this.summit.x, this.summit.y, this.summit.z]), 3))
-    sg.setAttribute('aSize', new THREE.BufferAttribute(new Float32Array([SUMMIT_CONFIG.glowSize]), 1))
-    sg.setAttribute('aSeed', new THREE.BufferAttribute(new Float32Array([0.5]), 1))
-    sg.setAttribute('aTint', new THREE.BufferAttribute(new Float32Array([1.5, 1.2, 0.7]), 3))
-    this.summitGlow = new THREE.Points(sg, this.glowMat)
+    this.summitGlowGeom = new THREE.BufferGeometry()
+    this.summitGlowGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array([this.summit.x, this.summit.y, this.summit.z]), 3))
+    this.summitGlowGeom.setAttribute('aSize', new THREE.BufferAttribute(new Float32Array([SUMMIT_CONFIG.glowSize]), 1))
+    this.summitGlowGeom.setAttribute('aSeed', new THREE.BufferAttribute(new Float32Array([0.5]), 1))
+    this.summitGlowGeom.setAttribute('aTint', new THREE.BufferAttribute(new Float32Array([1.5, 1.2, 0.7]), 3))
+    this.summitGlow = new THREE.Points(this.summitGlowGeom, this.glowMat)
     this.summitGlow.frustumCulled = false
     this.summitGlow.renderOrder = 9
     this.group.add(this.summitGlow)
   }
 
-  // ---------------------------------------------------------------------
-  // Public getters
-  // ---------------------------------------------------------------------
+  dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
+    this.seedMesh.dispose()
+    this.seedGeom.dispose()
+    this.seedMat.dispose()
+    this.glowGeom.dispose()
+    this.nestGlowGeom.dispose()
+    this.summitGlowGeom.dispose()
+    this.glowMat.dispose()
+    this.ringGeom.dispose()
+    this.ringMat.dispose()
+    this.beaconGeom.dispose()
+    this.beaconMat.dispose()
+    // Geometrias/materiais externos pertencem ao Forest — não dispor aqui.
+    this.group.clear()
+    this.seeds.length = 0
+    this.seedRender.length = 0
+    this.nests.length = 0
+    this.nestFound.clear()
+  }
 
   get remaining(): number {
     let n = 0
@@ -437,16 +427,11 @@ export class Collectibles {
     return this._summitFound
   }
 
-  // ---------------------------------------------------------------------
-  // Reset / restore
-  // ---------------------------------------------------------------------
-
-  /** (Re)planta as sementes de um novo voo. */
   resetSeeds(count: number): void {
+    if (this.disposed) return
     const n = Math.min(count, this.cap)
     this.seeds = seedPositions(n)
 
-    // State arrays
     if (this.state.length !== n) {
       this.state = new Uint8Array(n)
       this.dieT = new Float32Array(n)
@@ -459,8 +444,8 @@ export class Collectibles {
       for (let i = 0; i < n; i += 1) this.seedRender.push(new THREE.Vector3())
     }
 
-    const pos = this.glow.geometry.attributes.position as THREE.BufferAttribute
-    const tint = this.glow.geometry.attributes.aTint as THREE.BufferAttribute
+    const pos = this.glowGeom.attributes.position as THREE.BufferAttribute
+    const tint = this.glowGeom.attributes.aTint as THREE.BufferAttribute
     const colorArr = this.seedMesh.instanceColor!.array as Float32Array
 
     for (let i = 0; i < n; i += 1) {
@@ -478,7 +463,7 @@ export class Collectibles {
 
     pos.needsUpdate = true
     tint.needsUpdate = true
-    this.glow.geometry.attributes.aSize.needsUpdate = true
+    this.glowGeom.attributes.aSize.needsUpdate = true
     this.seedMesh.instanceColor!.needsUpdate = true
     this.seedMesh.count = n
 
@@ -486,7 +471,6 @@ export class Collectibles {
     this._summitFound = false
   }
 
-  /** Restaura o estado de "encontrado" (para carregar save). */
   restoreFound(nests: Iterable<number>, summit: boolean): void {
     this.nestFound.clear()
     for (const n of nests) {
@@ -496,26 +480,20 @@ export class Collectibles {
     this.applyNestVisibility()
   }
 
-  /** Reset completo: sementes + nests + summit. */
   resetAll(count: number): void {
     this.resetSeeds(count)
     this.nestFound.clear()
     this.applyNestVisibility()
   }
 
-  // ---------------------------------------------------------------------
-  // Internal helpers
-  // ---------------------------------------------------------------------
-
   private applyNestVisibility(): void {
-    const size = this.nestGlow.geometry.attributes.aSize as THREE.BufferAttribute
+    const size = this.nestGlowGeom.attributes.aSize as THREE.BufferAttribute
     for (let i = 0; i < NEST_COUNT; i += 1) {
       size.setX(i, this.nestFound.has(i) ? 0 : NEST_CONFIG.glowSize)
     }
     size.needsUpdate = true
   }
 
-  /** Atualiza matrizes sem animação (usado após reset). */
   private refreshMatricesStatic(): void {
     const m = this._m
     const q = this._q
@@ -527,25 +505,19 @@ export class Collectibles {
     this.seedMesh.instanceMatrix.needsUpdate = true
   }
 
-  // ---------------------------------------------------------------------
-  // Update
-  // ---------------------------------------------------------------------
-
   update(dt: number, viewScale: number, player: THREE.Vector3, daylight: number): void {
+    if (this.disposed) return
     this.time += dt
     this.glowMat.uniforms.uTime.value = this.time
     this.glowMat.uniforms.uScale.value = viewScale
-    // Glow fica mais quente/alaranjado à noite
     const nightBoost = 1 - daylight
     this.glowMat.uniforms.uColor.value.setRGB(
       1,
       0.72 + 0.10 * nightBoost,
       0.22 + 0.20 * nightBoost,
     )
-    // Beacon pulse
     ;(this.beacon.material as THREE.ShaderMaterial).uniforms.uTime.value = this.time
 
-    // ---- Seeds ----
     const pickupR2 = CONFIG.seeds.pickupRadius ** 2
     const attractR2 = SEED_CONFIG.attractRadius ** 2
     const attractRadius = SEED_CONFIG.attractRadius
@@ -556,9 +528,8 @@ export class Collectibles {
     const s0 = this._scaleZero
     const scratchPos = this._pos
     const scratchScale = this._scale
-    const scratchCol = this._col
     const colorArr = this.seedMesh.instanceColor!.array as Float32Array
-    const glowPos = this.glow.geometry.attributes.position as THREE.BufferAttribute
+    const glowPos = this.glowGeom.attributes.position as THREE.BufferAttribute
     let colorsChanged = false
     let glowPosChanged = false
 
@@ -566,13 +537,9 @@ export class Collectibles {
     for (let i = 0; i < n; i += 1) {
       const st = this.state[i]
 
-      if (st === STATE_DEAD) {
-        // Morto — matriz já está em escala 0, nada a fazer
-        continue
-      }
+      if (st === STATE_DEAD) continue
 
       if (st === STATE_DYING) {
-        // Animação de coleta: pop + fade
         this.dieT[i] += dt
         const t = this.dieT[i] / SEED_CONFIG.popTime
         if (t >= 1) {
@@ -585,13 +552,11 @@ export class Collectibles {
           colorsChanged = true
           continue
         }
-        // Curva de pop: 1 → ~2.2 → 0
         const peak = Math.sin(t * Math.PI)
         const sc = (1 - t * t) * (1 + peak * 1.2)
         scratchScale.set(sc, sc, sc)
         m.compose(this.seedRender[i], q.identity(), scratchScale)
         this.seedMesh.setMatrixAt(i, m)
-        // Fade-out escurecendo
         const fade = 1 - t
         colorArr[i * 3] = fade
         colorArr[i * 3 + 1] = fade
@@ -600,35 +565,30 @@ export class Collectibles {
         continue
       }
 
-      // STATE_ALIVE
       const base = this.seeds[i]
       const render = this.seedRender[i]
       const baseD2 = base.distanceToSquared(player)
 
-      // Atração magnética: quando perto, a seed flui em direção ao jogador
       if (baseD2 < attractR2) {
         const d = Math.sqrt(baseD2)
         const pull = 1 - d / attractRadius
         const t = Math.min(1, dt * 14 * pull)
         render.lerp(player, t)
       } else {
-        // Retorno suave à base
         const t = Math.min(1, dt * 5)
         render.lerp(base, t)
       }
 
-      // Pickup baseado em render (sensação satisfatória de "puxar" a seed)
       const renderD2 = render.distanceToSquared(player)
       if (renderD2 < pickupR2) {
         this.state[i] = STATE_DYING
         this.dieT[i] = 0
         this.glowSize[i] = 0
-        this.glow.geometry.attributes.aSize.needsUpdate = true
+        this.glowGeom.attributes.aSize.needsUpdate = true
         this.events.onSeed(render.clone())
         continue
       }
 
-      // Atualizar matriz (bob + rotação)
       const bob = Math.sin(this.time * 1.6 + i) * 0.45
       scratchPos.copy(render)
       scratchPos.y += bob
@@ -636,7 +596,6 @@ export class Collectibles {
       m.compose(scratchPos, q, s1)
       this.seedMesh.setMatrixAt(i, m)
 
-      // Glow segue a render pos (para o pull ser visível)
       glowPos.setXYZ(i, scratchPos.x, scratchPos.y, scratchPos.z)
       glowPosChanged = true
     }
@@ -645,26 +604,23 @@ export class Collectibles {
     if (colorsChanged) this.seedMesh.instanceColor!.needsUpdate = true
     if (glowPosChanged) glowPos.needsUpdate = true
 
-    // ---- Nests ----
     const nestPickupR2 = NEST_CONFIG.pickupRadius ** 2
     for (const nest of this.nests) {
       if (this.nestFound.has(nest.index)) continue
       if (nest.pos.distanceToSquared(player) < nestPickupR2) {
         this.nestFound.add(nest.index)
-        const size = this.nestGlow.geometry.attributes.aSize as THREE.BufferAttribute
+        const size = this.nestGlowGeom.attributes.aSize as THREE.BufferAttribute
         size.setX(nest.index, 0)
         size.needsUpdate = true
         this.events.onNest(nest.index, nest.pos)
       }
     }
 
-    // ---- Summit ----
     if (!this._summitFound && this.summit.distanceToSquared(player) < SUMMIT_CONFIG.pickupRadius ** 2) {
       this._summitFound = true
       this.events.onSummit(this.summit)
     }
 
-    // Ring + beacon animation
     this.ring.rotation.y = this.time * 0.35
     this.ring.rotation.x = Math.PI / 2 + Math.sin(this.time * 0.4) * 0.1
     const found = this._summitFound
@@ -673,14 +629,6 @@ export class Collectibles {
     this.summitGlow.visible = !found
   }
 
-  // ---------------------------------------------------------------------
-  // Query API
-  // ---------------------------------------------------------------------
-
-  /**
-   * Semente viva mais próxima: distância e direção (para a bússola do HUD).
-   * Se `outDir` for fornecido, escreve nele sem alocar; senão, aloca um novo.
-   */
   nearestSeed(from: THREE.Vector3, outDir?: THREE.Vector3): { dist: number; dir: THREE.Vector3 } | null {
     let best = Infinity
     let idx = -1
