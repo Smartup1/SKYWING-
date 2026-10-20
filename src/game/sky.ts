@@ -54,6 +54,7 @@ void main() {
 export class Sky {
   readonly mesh: THREE.Mesh
   private readonly mat: THREE.ShaderMaterial
+  private readonly geom: THREE.SphereGeometry
 
   constructor() {
     this.mat = new THREE.ShaderMaterial({
@@ -73,10 +74,16 @@ export class Sky {
         uTime: { value: 0 },
       },
     })
-    this.mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 40, 24), this.mat)
+    this.geom = new THREE.SphereGeometry(1, 40, 24)
+    this.mesh = new THREE.Mesh(this.geom, this.mat)
     this.mesh.scale.setScalar(9000)
     this.mesh.renderOrder = -10
     this.mesh.frustumCulled = false
+  }
+
+  dispose(): void {
+    this.geom.dispose()
+    this.mat.dispose()
   }
 
   update(sky: SkyState, camPos: THREE.Vector3, time: number): void {
@@ -181,6 +188,8 @@ function cloudTexture(): THREE.CanvasTexture {
 export class Clouds {
   readonly points: THREE.Points
   private readonly mat: THREE.ShaderMaterial
+  private readonly geom: THREE.BufferGeometry
+  private readonly tex: THREE.CanvasTexture
   private readonly range = 3600
 
   constructor(thermals: Thermal[]) {
@@ -218,18 +227,19 @@ export class Clouds {
       clump(x, y, z, radius, high ? 14 : 18, high ? 1.5 : 1.0, key)
       key += 1
     }
-    const geo = new THREE.BufferGeometry()
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
-    geo.setAttribute('aSize', new THREE.Float32BufferAttribute(size, 1))
-    geo.setAttribute('aShade', new THREE.Float32BufferAttribute(shade, 1))
-    geo.setAttribute('aSeed', new THREE.Float32BufferAttribute(seed, 1))
+    this.geom = new THREE.BufferGeometry()
+    this.geom.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+    this.geom.setAttribute('aSize', new THREE.Float32BufferAttribute(size, 1))
+    this.geom.setAttribute('aShade', new THREE.Float32BufferAttribute(shade, 1))
+    this.geom.setAttribute('aSeed', new THREE.Float32BufferAttribute(seed, 1))
+    this.tex = cloudTexture()
     this.mat = new THREE.ShaderMaterial({
       vertexShader: CLOUD_VERT,
       fragmentShader: CLOUD_FRAG,
       transparent: true,
       depthWrite: false,
       uniforms: {
-        uTex: { value: cloudTexture() },
+        uTex: { value: this.tex },
         uCam: { value: new THREE.Vector3() },
         uDrift: { value: new THREE.Vector2() },
         uScale: { value: 700 },
@@ -239,9 +249,15 @@ export class Clouds {
         uFog: { value: new THREE.Color() },
       },
     })
-    this.points = new THREE.Points(geo, this.mat)
+    this.points = new THREE.Points(this.geom, this.mat)
     this.points.frustumCulled = false
     this.points.renderOrder = 5
+  }
+
+  dispose(): void {
+    this.geom.dispose()
+    this.tex.dispose()
+    this.mat.dispose()
   }
 
   update(sky: SkyState, camera: THREE.PerspectiveCamera, drift: THREE.Vector2, viewportHeight: number): void {
