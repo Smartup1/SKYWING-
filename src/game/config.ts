@@ -18,7 +18,7 @@ export const DEFAULT_CONFIG = {
     /** Velocidade (m/s) em que o ângulo de equilíbrio sustenta o peso. */
     trimSpeed: 11,
     maxSpeed: 42,
-    cruiseSpeed: 10.5,
+    cruiseSpeed: 31.5,
     pitchRate: 1.35,
     rollRate: 2.6,
     maxBank: 0.85,
@@ -29,11 +29,11 @@ export const DEFAULT_CONFIG = {
     ceiling: 430,
   },
   stamina: {
-    max: 100,
+    max: 300,
     flapDrain: 8,
     boostDrain: 24,
-    recover: 9,
-    restRecover: 28,
+    recover: 27,
+    restRecover: 84,
   },
   wind: {
     speed: 3.6,
