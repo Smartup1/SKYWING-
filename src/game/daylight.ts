@@ -479,19 +479,19 @@ export function skyAt(hour: number, out: SkyState, opts: SkyOptions = {}): SkySt
   // ---- Fog ----
   out.fog.copy(out.horizon).lerp(out.sunColor, 0.12 + sunsetFactor * 0.28)
   // Density: alta no crepúsculo e à noite, baixa ao meio-dia
-  out.fogDensity = 0.0012 + 0.0018 * sunsetFactor + 0.0010 * out.night
+  out.fogDensity = 0.0010 + 0.0010 * sunsetFactor + 0.0006 * out.night
   out.hazeTint.copy(out.horizon).lerp(out.sunColor, 0.35).lerp(_a.setRGB(0.5, 0.55, 0.7, THREE.LinearSRGBColorSpace), out.night * 0.4)
 
   // ---- Hemisphere light ----
   out.hemiSky.copy(out.zenith).lerp(out.horizon, 0.60).multiplyScalar(1.35)
   // Noite: puxa para azul profundo
-  out.hemiSky.lerp(setLinear(_a, 0.10, 0.16, 0.35), out.night * 0.70)
-  setLinear(out.hemiGround, 0.14, 0.12, 0.08).multiplyScalar(0.25 + out.daylight * 0.75)
+  out.hemiSky.lerp(setLinear(_a, 0.12, 0.18, 0.42), out.night * 0.55)
+  setLinear(out.hemiGround, 0.14, 0.12, 0.08).multiplyScalar(0.35 + out.daylight * 0.85)
   out.ambientTint.copy(out.hemiSky).multiplyScalar(0.5)
 
   // ---- Lua ----
   const moonUp = Math.max(0, out.moonSin)
-  out.moonIntensity = 0.75 * out.night * moonUp * out.moonIllum
+  out.moonIntensity = 1.2 * out.night * moonUp * (0.35 + out.moonIllum)
   setLinear(out.moonColor, 0.85, 0.90, 1.00)
 
   // ---- Nuvens ----
@@ -560,7 +560,7 @@ export function skyAt(hour: number, out: SkyState, opts: SkyOptions = {}): SkySt
   out.bloomThreshold = 0.92 - 0.18 * out.night - 0.06 * out.twilight
 
   // Vinheta: sutil durante o dia, forte à noite
-  out.vignette = 0.12 + 0.10 * out.night + 0.05 * out.twilight
+  out.vignette = 0.08 + 0.06 * out.night + 0.03 * out.twilight
 
   return out
 }
