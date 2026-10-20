@@ -83,6 +83,11 @@ class SpriteSystem {
     this.points.renderOrder = 6
   }
 
+  dispose(): void {
+    this.points.geometry.dispose()
+    this.mat.dispose()
+  }
+
   emit(p: THREE.Vector3, v: THREE.Vector3, o: Emit): void {
     const i = this.cursor
     this.cursor = (this.cursor + 1) % this.cap
@@ -167,10 +172,12 @@ export class Fx {
   private readonly streakPos = new Float32Array(60 * 6)
   private readonly streakHead = new Float32Array(60 * 3)
   private readonly streakMat: THREE.LineBasicMaterial
-  private readonly thermalPts: THREE.Points
-  private readonly thermalSprites: SpriteSystem
   private readonly tmpV = new THREE.Vector3()
   private readonly tmpP = new THREE.Vector3()
+  private readonly tmpRight = new THREE.Vector3()
+  private readonly tmpUp = new THREE.Vector3()
+  private readonly tmpDir = new THREE.Vector3()
+  private readonly tmpRel = new THREE.Vector3()
   private thermalList: Thermal[] = []
 
   constructor(thermals: Thermal[]) {
@@ -217,13 +224,16 @@ export class Fx {
     this.streaks.renderOrder = 8
     this.group.add(this.streaks)
     for (let i = 0; i < 60; i += 1) this.streakHead.set([1e5, 0, 0], i * 3)
+  }
 
-    // Colunas de térmica.
-    this.thermalSprites = new SpriteSystem(1, true)
-    const tg = new THREE.BufferGeometry()
-    this.thermalPts = new THREE.Points(tg, new THREE.PointsMaterial())
-    void this.thermalPts
-    void this.thermalSprites
+  dispose(): void {
+    this.soft.dispose()
+    this.glow.dispose()
+    this.motes.geometry.dispose()
+    this.moteMat.dispose()
+    this.streaks.geometry.dispose()
+    this.streakMat.dispose()
+    this.group.clear()
   }
 
   setThermals(list: Thermal[]): void {
@@ -243,10 +253,10 @@ export class Fx {
       } else if (kind === 'feather') {
         this.soft.emit(pos, v.clone().multiplyScalar(2 + Math.random() * 3), { life: 1.6 + Math.random(), size: 0.45, size1: 0.3, color: Math.random() < 0.5 ? 0x6b4a2c : 0xe8a35a, alpha: 0.9, gravity: 1.5, drag: 1.2 })
       } else if (kind === 'spray') {
-        const base = dir ? dir.clone().multiplyScalar(4) : new THREE.Vector3()
-        this.soft.emit(pos, v.clone().multiplyScalar(2.5).add(base).add(new THREE.Vector3(0, 3 + Math.random() * 3, 0)), { life: 0.8 + Math.random() * 0.6, size: 0.5, size1: 1.0, color: 0xdff3ff, alpha: 0.55, gravity: 9, drag: 0.5 })
+        const base = dir ? dir.clone().multiplyScalar(4) : this.tmpDir.set(0, 0, 0)
+        this.soft.emit(pos, v.clone().multiplyScalar(2.5).add(base).add(this.tmpRight.set(0, 3 + Math.random() * 3, 0)), { life: 0.8 + Math.random() * 0.6, size: 0.5, size1: 1.0, color: 0xdff3ff, alpha: 0.55, gravity: 9, drag: 0.5 })
       } else if (kind === 'dust') {
-        this.soft.emit(pos, new THREE.Vector3(v.x * 3, Math.abs(v.y) * 1.2, v.z * 3), { life: 1.1 + Math.random() * 0.6, size: 0.8, size1: 2.2, color: 0xb8a77f, alpha: 0.5, drag: 2 })
+        this.soft.emit(pos, this.tmpDir.set(v.x * 3, Math.abs(v.y) * 1.2, v.z * 3), { life: 1.1 + Math.random() * 0.6, size: 0.8, size1: 2.2, color: 0xb8a77f, alpha: 0.5, drag: 2 })
       } else {
         this.soft.emit(pos, v.clone().multiplyScalar(2), { life: 1.8, size: 0.35, size1: 0.3, color: 0x5d8a35, alpha: 0.9, gravity: 2, drag: 0.8 })
       }
@@ -255,8 +265,8 @@ export class Fx {
 
   /** Esguicho contínuo ao roçar a água ou o chão. */
   trail(pos: THREE.Vector3, vel: THREE.Vector3, kind: 'spray' | 'dust'): void {
-    const d = vel.clone().normalize()
-    this.burst(pos, kind, 0.35, d)
+    this.tmpDir.copy(vel).normalize()
+    this.burst(pos, kind, 0.35, this.tmpDir)
   }
 
   update(dt: number, camera: THREE.PerspectiveCamera, viewHeight: number, sky: SkyState, time: number, wind: THREE.Vector3, airVel: THREE.Vector3, speed: number): void {
@@ -275,17 +285,17 @@ export class Fx {
     const strength = THREE.MathUtils.clamp((speed - 17) / 18, 0, 1)
     this.streakMat.opacity = strength * 0.5
     if (strength > 0.01) {
-      const dir = this.tmpV.copy(airVel).normalize()
+      const dir = this.tmpDir.copy(airVel).normalize()
       const cam = camera.position
-      const right = this.tmpP.crossVectors(dir, new THREE.Vector3(0, 1, 0)).normalize()
-      const up = new THREE.Vector3().crossVectors(right, dir).normalize()
+      const right = this.tmpRight.crossVectors(dir, this.tmpP.set(0, 1, 0)).normalize()
+      const up = this.tmpUp.crossVectors(right, dir).normalize()
       for (let i = 0; i < 60; i += 1) {
         const hx = this.streakHead[i * 3]
         let px = hx
         let py = this.streakHead[i * 3 + 1]
         let pz = this.streakHead[i * 3 + 2]
-        const rel = new THREE.Vector3(px - cam.x, py - cam.y, pz - cam.z)
-        const along = rel.dot(dir)
+        this.tmpRel.set(px - cam.x, py - cam.y, pz - cam.z)
+        const along = this.tmpRel.dot(dir)
         if (hx > 9e4 || along < -6) {
           const a = Math.random() * Math.PI * 2
           const r = 3 + Math.random() * 14
@@ -298,7 +308,6 @@ export class Fx {
         px -= dir.x * speed * dt
         py -= dir.y * speed * dt
         pz -= dir.z * speed * dt
-        px += airVel.x * 0
         this.streakHead[i * 3] = px
         this.streakHead[i * 3 + 1] = py
         this.streakHead[i * 3 + 2] = pz
