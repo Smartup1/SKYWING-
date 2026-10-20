@@ -63,13 +63,15 @@ type Chunk = { ix: number; iz: number; cx: number; cz: number; lod: number; mesh
 export class TerrainManager {
   readonly group = new THREE.Group()
   readonly material: THREE.MeshStandardMaterial
+  private readonly texture: THREE.CanvasTexture
   private readonly chunks: Chunk[] = []
   private readonly half = CONFIG.world.size / 2
   private readonly n = CONFIG.world.size / CHUNK
+  private disposed = false
 
   constructor() {
-    const tex = detailTexture()
-    this.material = new THREE.MeshStandardMaterial({ vertexColors: true, map: tex, roughness: 0.96, metalness: 0 })
+    this.texture = detailTexture()
+    this.material = new THREE.MeshStandardMaterial({ vertexColors: true, map: this.texture, roughness: 0.96, metalness: 0 })
     this.material.onBeforeCompile = shader => {
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <map_fragment>',
@@ -93,6 +95,16 @@ export class TerrainManager {
     }
   }
 
+  dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
+    for (const c of this.chunks) c.mesh.geometry.dispose()
+    this.chunks.length = 0
+    this.material.dispose()
+    this.texture.dispose()
+    this.group.clear()
+  }
+
   private wantedLod(c: Chunk, camX: number, camZ: number): number {
     // Distância ao ponto mais próximo do bloco, para o LOD não depender do centro.
     const dx = Math.max(Math.abs(camX - c.cx) - CHUNK / 2, 0)
@@ -103,6 +115,7 @@ export class TerrainManager {
 
   /** Reconstrói até `budget` blocos cujo nível de detalhe mudou. Devolve quantos restam. */
   update(camX: number, camZ: number, budget: number): number {
+    if (this.disposed) return 0
     let pending: Chunk[] = []
     for (const c of this.chunks) {
       const want = this.wantedLod(c, camX, camZ)
@@ -220,10 +233,12 @@ export class TerrainManager {
 
   /** Constrói todos os blocos em fatias, para a barra de progresso. */
   async buildAll(camX: number, camZ: number, onProgress: (p: number) => void): Promise<void> {
+    if (this.disposed) return
     const total = this.chunks.length
     let done = 0
     const order = [...this.chunks].sort((a, b) => Math.hypot(a.cx - camX, a.cz - camZ) - Math.hypot(b.cx - camX, b.cz - camZ))
     for (const c of order) {
+      if (this.disposed) return
       this.build(c, this.wantedLod(c, camX, camZ))
       done += 1
       if (done % 24 === 0) {
@@ -310,7 +325,9 @@ void main() {
 export class Water {
   readonly mesh: THREE.Mesh
   private readonly mat: THREE.ShaderMaterial
-  private depthTex: THREE.DataTexture
+  private readonly depthTex: THREE.DataTexture
+  private readonly geom: THREE.PlaneGeometry
+  private disposed = false
 
   constructor() {
     const size = 512
@@ -339,18 +356,29 @@ export class Water {
         },
       ]),
     })
-    this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(14000, 14000).rotateX(-Math.PI / 2), this.mat)
+    this.geom = new THREE.PlaneGeometry(14000, 14000).rotateX(-Math.PI / 2)
+    this.mesh = new THREE.Mesh(this.geom, this.mat)
     this.mesh.position.y = WATER_LEVEL
     this.mesh.renderOrder = 2
     this.mesh.frustumCulled = false
   }
 
+  dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
+    this.geom.dispose()
+    this.mat.dispose()
+    this.depthTex.dispose()
+  }
+
   /** Amostra o terreno em grade grossa para saber a profundidade em qualquer ponto do lago. */
   async bake(onProgress: (p: number) => void): Promise<void> {
+    if (this.disposed) return
     const size = 512
     const data = new Uint8Array(size * size)
     const span = CONFIG.world.size
     for (let j = 0; j < size; j += 1) {
+      if (this.disposed) return
       for (let i = 0; i < size; i += 1) {
         const x = (i / (size - 1) - 0.5) * span
         const z = (j / (size - 1) - 0.5) * span
@@ -367,6 +395,7 @@ export class Water {
   }
 
   update(sky: SkyState, camPos: THREE.Vector3, time: number): void {
+    if (this.disposed) return
     this.mesh.position.x = camPos.x
     this.mesh.position.z = camPos.z
     const u = this.mat.uniforms
