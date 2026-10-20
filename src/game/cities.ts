@@ -56,7 +56,6 @@ function roadGeometry(sites: readonly CitySite[], width: number, lift: number, d
   return geometry
 }
 
-/** Praça: gramado levemente ondulado seguindo o terreno. */
 function plazaGeometry(data: CityData): THREE.BufferGeometry {
   const positions: number[] = []
   const indices: number[] = []
@@ -100,7 +99,65 @@ function windowSlots(v: Volume): number {
 const CAR_COLORS = [0xc0392b, 0x2e6da4, 0xe8e2d0, 0x2b2f33, 0xd6a02c, 0x3f8f5b, 0x8a8f96, 0x7a3b8c]
 const TREE_TONES = [0x3f7d3a, 0x4d8c3f, 0x2f6b3c, 0x5b9a45, 0x6a9a3a]
 
-type Car = { lane: number; offset: number; speed: number }
+type Car = { lane: number; offset: number; speed: number; color: number; wheelSpin: number }
+
+function makeCar(color: number): THREE.Group {
+  const group = new THREE.Group()
+  const bodyMaterial = new THREE.MeshStandardMaterial({ color, roughness: 0.52, metalness: 0.25 })
+  const trimMaterial = new THREE.MeshStandardMaterial({ color: 0x1c1d22, roughness: 0.8, metalness: 0.4 })
+  const glassMaterial = new THREE.MeshStandardMaterial({ color: 0x8eaac0, roughness: 0.18, metalness: 0.55, transparent: true, opacity: 0.8 })
+  const lightMaterial = new THREE.MeshStandardMaterial({ color: 0xf6f0d0, emissive: 0xffe7a6, emissiveIntensity: 0.8, roughness: 0.35 })
+  const wheelMaterial = new THREE.MeshStandardMaterial({ color: 0x181818, roughness: 0.9, metalness: 0.25 })
+
+  const chassis = new THREE.Mesh(new THREE.BoxGeometry(2.25, 0.8, 4.5), bodyMaterial)
+  chassis.position.y = 0.82
+  group.add(chassis)
+
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.8, 2.2), glassMaterial)
+  cabin.position.set(0, 1.25, -0.2)
+  group.add(cabin)
+
+  const hood = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.42, 1.3), trimMaterial)
+  hood.position.set(0, 0.9, 1.55)
+  group.add(hood)
+
+  const rear = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.42, 1.0), trimMaterial)
+  rear.position.set(0, 0.9, -1.7)
+  group.add(rear)
+
+  const roof = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.22, 1.4), trimMaterial)
+  roof.position.set(0, 1.75, -0.25)
+  group.add(roof)
+
+  const headlampL = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.18, 0.34), lightMaterial)
+  headlampL.position.set(-0.82, 0.9, 2.1)
+  const headlampR = headlampL.clone()
+  headlampR.position.x = 0.82
+  const taillampL = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 0.34), new THREE.MeshStandardMaterial({ color: 0xff433d, emissive: 0xff2d2d, emissiveIntensity: 0.9 }))
+  taillampL.position.set(-0.75, 0.9, -2.18)
+  const taillampR = taillampL.clone()
+  taillampR.position.x = 0.75
+
+  group.add(headlampL, headlampR, taillampL, taillampR)
+
+  const wheelGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.28, 16)
+  const wheelPositions = [
+    [-0.95, 0.42, 1.45],
+    [0.95, 0.42, 1.45],
+    [-0.95, 0.42, -1.45],
+    [0.95, 0.42, -1.45],
+  ] as const
+
+  for (const [x, y, z] of wheelPositions) {
+    const wheel = new THREE.Mesh(wheelGeo, wheelMaterial)
+    wheel.rotation.z = Math.PI / 2
+    wheel.position.set(x, y, z)
+    group.add(wheel)
+  }
+
+  group.rotation.order = 'YXZ'
+  return group
+}
 
 /** Assentamentos instanciados (poucas chamadas de desenho): prédios, praças, árvores, postes, carros e poleiros. */
 export class Cities {
@@ -117,8 +174,7 @@ export class Cities {
     color: 0xffffff, transparent: true, opacity: 0.2, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
   })
   private readonly cars: Car[] = []
-  private readonly carBody: THREE.InstancedMesh
-  private readonly carLights: THREE.InstancedMesh
+  private readonly carGroups: THREE.Group[] = []
   private readonly perchBeams: THREE.InstancedMesh
   private readonly perchRings: THREE.InstancedMesh
   private readonly visited = new Set<number>()
@@ -157,7 +213,6 @@ export class Cities {
     }
     body.instanceMatrix.needsUpdate = true
 
-    // Telhados: pirâmides baixas (casas e igreja) ou lajes finas com platibanda (prédios).
     const pitchedCount = data.buildings.filter(b => b.pitched).length
     const flatCount = data.buildings.length - pitchedCount
     const pitched = new THREE.InstancedMesh(new THREE.ConeGeometry(0.7071, 1, 4), new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 }), Math.max(1, pitchedCount))
@@ -171,6 +226,7 @@ export class Cities {
     const antennaMesh = new THREE.InstancedMesh(boxGeo, new THREE.MeshStandardMaterial({ color: 0x9aa0a6, roughness: 0.6, metalness: 0.4 }), Math.max(1, antennas.length))
     const beaconMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(0.55, 8, 6), this.beaconMaterial, Math.max(1, antennas.length))
     const flatTopFor = (b: Building) => b.ground + b.height
+
     for (const b of data.buildings) {
       if (b.pitched) {
         pitched.setMatrixAt(pi, matrixAt(b.x, b.ground + b.height + b.roofHeight / 2, b.z, b.rotation + Math.PI / 4, b.width * 1.12, b.roofHeight, b.depth * 1.12))
@@ -184,6 +240,7 @@ export class Cities {
     }
     pitched.count = pi
     flat.count = fi
+
     for (const [i, b] of spires.entries()) {
       const u = b.upper!
       const c = Math.cos(b.rotation)
@@ -201,7 +258,6 @@ export class Cities {
     beaconMesh.count = ai
     spireMesh.count = spires.length
 
-    // Janelas acesas à noite.
     let slots = 0
     for (const v of volumes) slots += windowSlots(v)
     const windows = new THREE.InstancedMesh(new THREE.BoxGeometry(0.62, 0.82, 0.045), this.windowMaterial, Math.max(1, slots))
@@ -225,7 +281,6 @@ export class Cities {
     }
     windows.count = wi
 
-    // Árvores (copa + tronco), postes e praças.
     const trees = data.trees
     const crowns = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92, flatShading: true }), Math.max(1, trees.length))
     const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.14, 0.2, 1, 6), new THREE.MeshStandardMaterial({ color: 0x5a4331, roughness: 1 }), Math.max(1, trees.length))
@@ -254,7 +309,6 @@ export class Cities {
     for (const [i, p] of data.plazas.entries()) fountains.setMatrixAt(i, matrixAt(p.x, surfaceAt(p.x, p.z) + 0.45, p.z, 0, 1, 1, 1))
     fountains.count = data.plazas.length
 
-    // Carros circulando pelas faixas (posição calculada a cada quadro).
     const lanes = data.lanes
     for (const [li, site] of CITY_SITES.entries()) {
       const laneIdx = lanes.map((l, i) => (l.site === li ? i : -1)).filter(i => i >= 0)
@@ -262,21 +316,18 @@ export class Cities {
       const count = site.kind === 'city' ? 46 : 16
       for (let k = 0; k < count; k += 1) {
         const lane = laneIdx[Math.floor(hash2(k, li, 701) * laneIdx.length)]
-        this.cars.push({ lane, offset: hash2(k, li, 702) * lanes[lane].length, speed: 4.5 + hash2(k, li, 703) * 4.5 })
+        this.cars.push({ lane, offset: hash2(k, li, 702) * lanes[lane].length, speed: 4.5 + hash2(k, li, 703) * 4.5, color: CAR_COLORS[Math.floor(hash2(k, li, 704) * CAR_COLORS.length)], wheelSpin: Math.random() * Math.PI * 2 })
       }
     }
-    this.carBody = new THREE.InstancedMesh(boxGeo, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5, metalness: 0.25 }), Math.max(1, this.cars.length))
-    this.carLights = new THREE.InstancedMesh(boxGeo, this.headlightMaterial, Math.max(1, this.cars.length))
-    this.carBody.frustumCulled = false
-    this.carLights.frustumCulled = false
-    this.carBody.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
-    this.carLights.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
-    for (const [i] of this.cars.entries()) this.carBody.setColorAt(i, color.setHex(CAR_COLORS[Math.floor(hash2(i, 9, 704) * CAR_COLORS.length)], THREE.SRGBColorSpace))
-    this.carBody.count = this.cars.length
-    this.carLights.count = this.cars.length
+
+    for (const car of this.cars) {
+      const model = makeCar(car.color)
+      model.scale.set(0.9, 0.9, 0.9)
+      this.carGroups.push(model)
+      this.group.add(model)
+    }
     this.updateCars(0)
 
-    // Faróis dos poleiros: coluna de luz e anel sobre a laje.
     const perches = this.perches
     this.perchBeams = new THREE.InstancedMesh(new THREE.CylinderGeometry(1.4, 1.4, 1, 16, 1, true), this.beamMaterial, Math.max(1, perches.length))
     this.perchRings = new THREE.InstancedMesh(
@@ -297,16 +348,13 @@ export class Cities {
     const roadMat = (c: number) => new THREE.MeshStandardMaterial({ color: c, roughness: 1 })
     const plazaMesh = new THREE.Mesh(plazaGeometry(data), roadMat(0x5f9a4c))
     const lineMat = new THREE.MeshBasicMaterial({ color: 0xe8e4d0, toneMapped: true })
-    this.group.add(
-      new THREE.Mesh(roadGeometry(CITY_SITES, 9, 0.035), roadMat(0x9a9c92)),
-      new THREE.Mesh(roadGeometry(CITY_SITES, 5.6, 0.075), roadMat(0x424a50)),
-      new THREE.Mesh(roadGeometry(CITY_SITES, 0.25, 0.09, true), lineMat),
-      plazaMesh, fountains,
-      body, flat, pitched, spireMesh, antennaMesh, beaconMesh, windows,
-      crowns, trunks, poles, bulbs,
-      this.carBody, this.carLights,
-      this.perchBeams, this.perchRings,
-    )
+    const sidewalkMat = new THREE.MeshStandardMaterial({ color: 0x82806c, roughness: 1 })
+    const streetMat = new THREE.MeshStandardMaterial({ color: 0x8a8f8d, roughness: 1 })
+    const roadBase = new THREE.Mesh(roadGeometry(CITY_SITES, 12.5, 0.09), sidewalkMat)
+    const roadMain = new THREE.Mesh(roadGeometry(CITY_SITES, 9, 0.035), streetMat)
+    const roadSecondary = new THREE.Mesh(roadGeometry(CITY_SITES, 5.6, 0.075), roadMat(0x424a50))
+    const dashedLine = new THREE.Mesh(roadGeometry(CITY_SITES, 0.25, 0.09, true), lineMat)
+    this.group.add(roadBase, roadMain, roadSecondary, dashedLine, plazaMesh, fountains, body, flat, pitched, spireMesh, antennaMesh, beaconMesh, windows, crowns, trunks, poles, bulbs, this.perchBeams, this.perchRings)
     this.group.traverse(object => {
       const mesh = object as THREE.Mesh
       if (mesh.isMesh) {
@@ -326,7 +374,6 @@ export class Cities {
     if (this.perchRings.instanceColor) this.perchRings.instanceColor.needsUpdate = true
   }
 
-  /** Marca poleiros já usados neste voo (ficam verdes). */
   setVisited(ids: Iterable<number>): void {
     const next = new Set(ids)
     for (const p of this.perches) {
@@ -338,7 +385,6 @@ export class Cities {
     for (const id of next) this.visited.add(id)
   }
 
-  /** Poleiro mais próximo que ainda não foi visitado, se houver. */
   nearestPerch(x: number, y: number, z: number, onlyNew = true): { perch: Perch; dist: number } | null {
     let best: { perch: Perch; dist: number } | null = null
     for (const p of this.perches) {
@@ -365,18 +411,23 @@ export class Cities {
       const x = lane.ax + (lane.bx - lane.ax) * k
       const z = lane.az + (lane.bz - lane.az) * k
       const heading = Math.atan2(lane.bx - lane.ax, lane.bz - lane.az)
-      this.carBody.setMatrixAt(i, matrixAt(x, y, z, heading, 1.8, 1.3, 4))
-      const fx = Math.sin(heading) * 2.05
-      const fz = Math.cos(heading) * 2.05
-      this.carLights.setMatrixAt(i, matrixAt(x + fx, y + 0.05, z + fz, heading, 1.5, 0.3, 0.12))
+
+      const model = this.carGroups[i]
+      model.position.set(x, y, z)
+      model.rotation.set(0, heading, 0)
+
+      const wheelMeshes = model.children.filter(child => (child as THREE.Mesh).isMesh && (child as THREE.Mesh).geometry instanceof THREE.CylinderGeometry)
+      for (const [wheelIndex, wheel] of wheelMeshes.entries()) {
+        wheel.rotation.x = Math.PI / 2
+        wheel.rotation.y = Math.PI * (wheelIndex % 2 === 0 ? 0.5 : 0)
+        wheel.rotation.z = Math.PI / 2 + this.carTime * car.speed * 0.6
+      }
     }
-    this.carBody.instanceMatrix.needsUpdate = true
-    this.carLights.instanceMatrix.needsUpdate = true
   }
 
   update(daylight: number, dt = 0, time = 0): void {
     const night = THREE.MathUtils.clamp((1 - daylight) * 1.1, 0, 0.95)
-    this.windowMaterial.opacity = night
+    this.windowMaterial.opacity = night * 0.95
     this.lampMaterial.opacity = THREE.MathUtils.clamp((1 - daylight) * 1.6, 0, 1)
     this.headlightMaterial.opacity = THREE.MathUtils.clamp((1 - daylight) * 1.6, 0, 1)
     this.beaconMaterial.opacity = (0.35 + 0.65 * Math.max(0, Math.sin(time * 3))) * 0.95
