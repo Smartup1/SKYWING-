@@ -1,0 +1,18 @@
+SKYWING — melhoria visual dos prédios
+
+Inclui:
+- Janelas nas quatro fachadas.
+- Frisos horizontais entre andares.
+- Pilastras verticais para dar profundidade às fachadas.
+- Uso de InstancedMesh para preservar desempenho.
+
+Instalação:
+1. Extraia o ZIP na raiz do repositório, junto ao package.json.
+2. Abra o CMD nessa pasta.
+3. Execute: node aplicar-melhoria-predios.mjs
+4. Valide: npm run typecheck
+5. Teste: npm test
+
+O script cria um backup de src/game/cities.ts antes de alterar. Se não encontrar o trecho esperado, interrompe sem alterar o arquivo.
+
+Não consegui gravar diretamente no GitHub porque a integração retornou erro 403. Depois de testar localmente, revise com git diff e faça commit/push.
