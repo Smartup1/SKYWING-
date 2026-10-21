@@ -1,0 +1,62 @@
+{
+  "version": 2,
+  "groups": {
+    "descobertas": {
+      "name": "Ninhos e descobertas",
+      "order": 20
+    },
+    "identidade-visual": {
+      "name": "Identidade visual",
+      "order": 30
+    },
+    "paisagem": {
+      "name": "Paisagem do vale",
+      "order": 10
+    }
+  },
+  "bundles": {},
+  "assets": {
+    "assets/models/arvore_folhosa.glb": {
+      "path": "/manus-storage/game/sha256/3aedfb1afbc6f148676983d860b580f9dbe190fb0ab9b0f226c14abbf155f501.glb",
+      "sha256": "sha256:3aedfb1afbc6f148676983d860b580f9dbe190fb0ab9b0f226c14abbf155f501",
+      "size": 1362700,
+      "assetType": "model",
+      "groupId": "paisagem"
+    },
+    "assets/models/conifera.glb": {
+      "path": "/manus-storage/game/sha256/644d46a61519ea09f777044dc47d19098a4b008fb739b4e3725d4d7378ddf927.glb",
+      "sha256": "sha256:644d46a61519ea09f777044dc47d19098a4b008fb739b4e3725d4d7378ddf927",
+      "size": 1192780,
+      "assetType": "model",
+      "groupId": "paisagem"
+    },
+    "assets/models/ninho.glb": {
+      "path": "/manus-storage/game/sha256/b387206b1defda42f6f322a915991ec51cca7293058c57d77be52e0ec1f0e52c.glb",
+      "sha256": "sha256:b387206b1defda42f6f322a915991ec51cca7293058c57d77be52e0ec1f0e52c",
+      "size": 1359476,
+      "assetType": "model",
+      "groupId": "descobertas"
+    },
+    "assets/models/rocha.glb": {
+      "path": "/manus-storage/game/sha256/e3c53e2a472c753457b9260de74422744762ce3a3ca8c9a981d83a024ed87d3f.glb",
+      "sha256": "sha256:e3c53e2a472c753457b9260de74422744762ce3a3ca8c9a981d83a024ed87d3f",
+      "size": 908776,
+      "assetType": "model",
+      "groupId": "paisagem"
+    },
+    "assets/share/favicon.png": {
+      "path": "/manus-storage/game/sha256/470fc55034e92213ae1a38f207b7046d20661c797b2bdc63120cde908b951a37.png",
+      "sha256": "sha256:470fc55034e92213ae1a38f207b7046d20661c797b2bdc63120cde908b951a37",
+      "size": 7535,
+      "assetType": "image",
+      "groupId": "identidade-visual"
+    },
+    "assets/share/og.png": {
+      "path": "/manus-storage/game/sha256/8adf98ae0f2522af7f7ca97ee2c6b23342b1789ec8add6eeaf154a043fd23c69.png",
+      "sha256": "sha256:8adf98ae0f2522af7f7ca97ee2c6b23342b1789ec8add6eeaf154a043fd23c69",
+      "size": 1192173,
+      "assetType": "image",
+      "groupId": "identidade-visual"
+    }
+  }
+}
