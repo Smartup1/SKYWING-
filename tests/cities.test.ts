@@ -1,4 +1,7 @@
+<<<<<<< HEAD
 import * as THREE from 'three'
+=======
+>>>>>>> 795b639e012abf732208c865466f8376e73b67ad
 import { describe, expect, it } from 'vitest'
 import { Cities } from '../src/game/cities'
 import { CITY_SITES, isUrbanAt } from '../src/game/cityLayout'
@@ -14,6 +17,7 @@ describe('cidades do vale', () => {
     cities.update(0.2)
   })
 
+<<<<<<< HEAD
   it('posiciona os edifícios no mapa e deixa as ruas com a face superior visível', () => {
     const cities = new Cities()
     const body = cities.group.children.find((child): child is THREE.InstancedMesh => (child as THREE.InstancedMesh).isInstancedMesh)
@@ -28,6 +32,8 @@ describe('cidades do vale', () => {
     expect(asphalt.geometry.getAttribute('normal').getY(0)).toBeGreaterThan(0)
   })
 
+=======
+>>>>>>> 795b639e012abf732208c865466f8376e73b67ad
   it('mantém cidades separadas da floresta de recompensas e preserva a quantidade de sementes', () => {
     for (const site of CITY_SITES) expect(isUrbanAt(site.x, site.z)).toBe(true)
     const seeds = seedPositions(48)

@@ -22,14 +22,21 @@ const _m = new THREE.Matrix4()
 const _q = new THREE.Quaternion()
 const _e = new THREE.Euler()
 const _v = new THREE.Vector3()
+<<<<<<< HEAD
 const _scale = new THREE.Vector3()
+=======
+>>>>>>> 795b639e012abf732208c865466f8376e73b67ad
 const _col = new THREE.Color()
 
 function composeMatrix(x: number, y: number, z: number, ry: number, sx = 1, sy = 1, sz = 1): THREE.Matrix4 {
   _v.set(x, y, z)
   _e.set(0, ry, 0)
   _q.setFromEuler(_e)
+<<<<<<< HEAD
   return _m.compose(_v, _q, _scale.set(sx, sy, sz))
+=======
+  return _m.compose(_v, _q, _v.set(sx, sy, sz))
+>>>>>>> 795b639e012abf732208c865466f8376e73b67ad
 }
 
 type Intersection = { x: number; z: number; size: number; tier: 0 | 1 | 2 }
@@ -160,9 +167,13 @@ function pushRibbon(
     const y2 = surfaceAt(p2x, p2z) + yLift
     const y3 = surfaceAt(p3x, p3z) + yLift
 
+<<<<<<< HEAD
     // A face superior precisa ter normal voltada para +Y; a ordem original
     // deixava as fitas de asfalto e sinalização invisíveis por back-face culling.
     pushQuad(layer, p0x, p0z, y0, p3x, p3z, y3, p2x, p2z, y2, p1x, p1z, y1, color)
+=======
+    pushQuad(layer, p0x, p0z, y0, p1x, p1z, y1, p2x, p2z, y2, p3x, p3z, y3, color)
+>>>>>>> 795b639e012abf732208c865466f8376e73b67ad
   }
 }
 
@@ -588,6 +599,7 @@ export class Cities {
     beaconMesh.count = ai
     spireMesh.count = spires.length
 
+<<<<<<< HEAD
     // Janelas nas quatro fachadas.
     const slots = volumes.reduce((acc, v) => {
       if (v.h < 4.5) return acc;
@@ -661,6 +673,35 @@ export class Cities {
     this.trackMesh(windows);
     this.trackMesh(bands);
     this.trackMesh(pilasters)
+=======
+    const slots = volumes.reduce((acc, v) => acc + (v.h < 4.5 ? 0 : Math.min(14, Math.floor(v.h / 4.2)) * (Math.min(4, Math.max(1, Math.floor(v.w / 4))) + 1)), 0)
+    const winGeo = this.trackGeo(new THREE.BoxGeometry(0.62, 0.82, 0.045))
+    const windows = new THREE.InstancedMesh(winGeo, this.windowMaterial, Math.max(1, slots))
+    windows.renderOrder = 1
+    let wi = 0
+    for (const v of volumes) {
+      if (v.h < 4.5) continue
+      const c = Math.cos(v.rot), s = Math.sin(v.rot)
+      const floors = Math.min(14, Math.floor(v.h / 4.2))
+      const columns = Math.min(4, Math.max(1, Math.floor(v.w / 4)))
+      for (let floor = 0; floor < floors; floor += 1) {
+        const y = v.y0 + 2.4 + floor * 4.1
+        for (let slot = 0; slot < columns; slot += 1) {
+          const lx = ((slot + 1) / (columns + 1) - 0.5) * v.w
+          const frontZ = -v.d / 2 - 0.04
+          windows.setMatrixAt(wi++, composeMatrix(v.x + lx * c + frontZ * s, y, v.z - lx * s + frontZ * c, v.rot))
+        }
+        windows.setMatrixAt(wi++, composeMatrix(v.x + (v.w / 2 + 0.04) * c, y, v.z - (v.w / 2 + 0.04) * s, v.rot + Math.PI / 2))
+      }
+    }
+    windows.count = wi
+    this.trackMesh(pitched)
+    this.trackMesh(flat)
+    this.trackMesh(spireMesh)
+    this.trackMesh(antennaMesh)
+    this.trackMesh(beaconMesh)
+    this.trackMesh(windows)
+>>>>>>> 795b639e012abf732208c865466f8376e73b67ad
   }
 
   private buildProps(): void {
@@ -742,7 +783,10 @@ export class Cities {
     const crosswalkGeo = this.trackGeo(layerToGeometry(buf.crosswalk))
 
     const asphaltMesh = new THREE.Mesh(asphaltGeo, this.asphaltMaterial)
+<<<<<<< HEAD
     asphaltMesh.name = 'city-asphalt'
+=======
+>>>>>>> 795b639e012abf732208c865466f8376e73b67ad
     const sidewalkMesh = new THREE.Mesh(sidewalkGeo, this.sidewalkMaterial)
     const curbMesh = new THREE.Mesh(curbGeo, this.curbMaterial)
     const linesMesh = new THREE.Mesh(linesGeo, this.lineMaterial)

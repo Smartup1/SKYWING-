@@ -257,8 +257,12 @@ function generateSite(data: CityData, site: CitySite, si: number, layout: UrbanL
   const churchCell: [number, number] = site.kind === 'city' ? [cx + 2, cz - 1] : [cx + 1, cz]
   const townhallCell: [number, number] = site.kind === 'city' ? [cx - 1, cz + 2] : [cx - 1, cz + 1]
   const marketCell: [number, number] = site.kind === 'city' ? [cx + 1, cz + 2] : [cx + 2, cz + 1]
+<<<<<<< HEAD
   // Espaça os quarteirões sem inflar os edifícios junto com a malha urbana.
   const maxFoot = Math.min(site.spacing - 11, 13)
+=======
+  const maxFoot = site.spacing - 11
+>>>>>>> 795b639e012abf732208c865466f8376e73b67ad
   const rot0 = site.seed * 0.017
   const first = data.buildings.length
 
