@@ -24,21 +24,23 @@ Escolha uma das cinco espécies no menu **Escolher ave**. A seleção é salva n
 
 As espécies têm efeitos distintos sobre velocidade, curvas, força das batidas, consumo de fôlego, recuperação e planeio. A opção **Assistência de voo (mais fácil)** suaviza a atitude e ajuda a manter o voo; ela pode ser ajustada em **Configurações**.
 
-O vale tem três assentamentos — **Vale Claro**, **Lago Azul** e **Campina** — com ruas e edifícios, além de bandos de **pombos**, **periquitos** e **pardais**. A paisagem inclui relevo, água, vegetação, nuvens e ciclo de dia e noite.
+O vale tem três assentamentos — **Vale Claro**, **Lago Azul** e **Campina** — com fachadas variadas, janelas com caixilhos e luzes, sacadas, vitrines, marquises, pilastras, cornijas, parapeitos e telhados. Ruas têm faixas, travessias e carros em movimento com carroceria, cabine envidraçada, rodas, faróis e lanternas. O tráfego e os detalhes de fachada aparecem ao se aproximar da cidade para poupar desempenho à distância. Há bandos de **pombos**, **periquitos**, **pardais** e mais aves nos bairros, no rio e no lago. A água tem reflexos móveis, brilhos nas ondas, caústicas rasas e espuma junto às margens.
 
 ## Controles
 
-| Ação | Teclado |
-| --- | --- |
-| Mergulhar / subir | W / S ou setas ↑ / ↓ |
-| Curvar | A / D ou setas ← / → |
-| Rolar | Q / E |
-| Bater asas / decolar | Espaço |
-| Impulsionar | Shift |
-| Trocar câmera | C |
-| Alternar cruzeiro automático | F |
-| Pausar / voltar | Esc |
-| Olhar ao redor | Mouse |
+| Ação | Teclado | Celular |
+| --- | --- | --- |
+| Mergulhar / subir | W / S ou setas ↑ / ↓ | Manche virtual ↑ / ↓ |
+| Curvar | A / D ou setas ← / → | Manche virtual ← / → |
+| Rolar | Q / E | Curva inclinada pelo manche |
+| Bater asas / decolar | Espaço | Segurar **Bater asas** |
+| Impulsionar | Shift | Segurar **Impulso** |
+| Trocar câmera | C | **Câmera** |
+| Alternar cruzeiro automático | F | **Cruzeiro** |
+| Pausar / voltar | Esc | **Pausar** |
+| Olhar ao redor | Mouse | Câmera de perseguição segue a ave |
+
+No celular, o HUD e os menus se ajustam ao retrato e à paisagem; a renderização começa em qualidade baixa para priorizar fluidez e bateria.
 
 Preferências, espécie escolhida e progresso ficam salvos localmente neste navegador. **Multiplayer online não está ativo nesta versão** e foi adiado; este projeto pode ser ampliado para incluir servidor persistente posteriormente.
 

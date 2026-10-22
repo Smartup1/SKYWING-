@@ -2,3 +2,10 @@ node_modules/
 dist/
 shots/
 /.manus-webdev/preview-identity.json
+# Assets restored from assets.lock.json
+/assets/models/arvore_folhosa.glb
+/assets/models/conifera.glb
+/assets/models/ninho.glb
+/assets/models/rocha.glb
+/assets/share/favicon.png
+/assets/share/og.png
