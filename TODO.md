@@ -1,5 +1,9 @@
 # SKYWING: Vida Selvagem — entregáveis
 
+## Fôlego e batida sem puxão lateral — concluído
+- [x] “aumente o fôlego”: prolongar o uso das batidas e permitir recuperação mais rápida, mantendo diferenças entre espécies; a reserva global subiu para 120 e a recuperação para 12/s.
+- [x] “quando bate as asas ele fica puxando pra esquerda outra hora direita”: as batidas simétricas não adicionam aceleração lateral, sem remover as curvas comandadas.
+
 ## Voo natural e controlável — concluído
 - [x] Voo natural e controlável, com sustentação, gravidade, arrasto, estol, mergulho, planeio, batidas de asa, curvas inclinadas, vento e limites de altitude; controles preservados: W/S ou setas para pitch, A/D ou setas para curva, Q/E para rolagem, Espaço para bater asas, Shift para impulso, C para câmera e Esc para pausa.
 
