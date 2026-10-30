@@ -69,6 +69,31 @@ describe('FlightModel', () => {
     expect(flapper.pos.y).toBeGreaterThan(-100)
   })
 
+  it('começa com mais fôlego e recupera mais rápido em planeio', () => {
+    const bird = new FlightModel()
+    bird.assisted = false
+    bird.cruise = false
+    bird.reset(0, 100, 0, 0, 30)
+    expect(bird.stamina).toBe(120)
+    bird.stamina = 40
+    for (let i = 0; i < 60; i += 1) bird.step(1 / 60, NO_INPUT, env, [])
+    expect(bird.stamina).toBeCloseTo(52, 5)
+  })
+
+  it('batidas simétricas não adicionam força lateral quando o corpo está inclinado', () => {
+    const glider = new FlightModel()
+    const flapper = new FlightModel()
+    for (const bird of [glider, flapper]) {
+      bird.assisted = false
+      bird.cruise = false
+      bird.reset(0, 120, 0, 0, 12)
+      bird.roll = 0.35
+    }
+    glider.step(1 / 60, NO_INPUT, env, [])
+    flapper.step(1 / 60, pressed({ flap: true }), env, [])
+    expect(flapper.vel.x).toBeCloseTo(glider.vel.x, 9)
+  })
+
   it('assistência mantém a batida automática em baixa velocidade quando o cruzeiro está desligado', () => {
     const assisted = new FlightModel()
     const manual = new FlightModel()
