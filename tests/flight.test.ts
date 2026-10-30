@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import * as THREE from 'three'
 import { FlightModel, NO_INPUT, type FlightEnv, type FlightInput } from '../src/game/flight'
 import { getBirdSpecies } from '../src/game/birdSpecies'
 
@@ -30,6 +31,26 @@ describe('FlightModel', () => {
     bird.step(1 / 60, pressed({ flap: true, flapPressed: true }), env, events)
     expect(bird.grounded).toBe(false)
     expect(bird.pos.y).toBeGreaterThan(0.32)
+    expect(bird.vel.y).toBeGreaterThan(5)
+    expect(events.some(e => e.type === 'takeoff')).toBe(true)
+  })
+
+  it('repousa parado em um poleiro urbano e decola novamente com Espaço', () => {
+    const bird = new FlightModel()
+    const events: Parameters<FlightModel['step']>[3] = []
+    const perch = new THREE.Vector3(12, 14, -8)
+    bird.reset(0, 80, 0, 0, 12)
+    bird.landOnPerch(perch, Math.PI / 2, events)
+    expect(bird.grounded).toBe(true)
+    expect(bird.perched).toBe(true)
+    expect(bird.vel.length()).toBe(0)
+    expect(events.some(e => e.type === 'perch')).toBe(true)
+    const restingPosition = bird.pos.clone()
+    bird.step(1 / 60, NO_INPUT, env, events)
+    expect(bird.pos.distanceTo(restingPosition)).toBeCloseTo(0)
+    bird.step(1 / 60, pressed({ flap: true, flapPressed: true }), env, events)
+    expect(bird.grounded).toBe(false)
+    expect(bird.perched).toBe(false)
     expect(bird.vel.y).toBeGreaterThan(5)
     expect(events.some(e => e.type === 'takeoff')).toBe(true)
   })
