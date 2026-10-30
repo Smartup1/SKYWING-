@@ -64,7 +64,13 @@ const gameState = page => page.evaluate(() => {
     birdSpecies: g.bird.species.id,
     flightAssist: g.flight.assisted,
     cityBuildings: g.debugState().cityBuildings,
+    cityVehicles: g.cities.vehicleCount,
     fauna: g.debugState().fauna,
+    cityPoles: g.debugState().cityPoles,
+    cityWireSpans: g.debugState().cityWireSpans,
+    landingPerches: g.debugState().landingPerches,
+    macaws: g.debugState().macaws,
+    macawsDiscovered: g.debugState().macawsDiscovered,
   }
 })
 const check = (condition, message) => { if (!condition) throw new Error(message) }
@@ -78,7 +84,13 @@ try {
   check(await page.title() === 'SKYWING: Vida Selvagem', 'título da página incorreto')
   const initial = await gameState(page)
   check(initial.cityBuildings >= 100, `cidades não foram construídas (${initial.cityBuildings} prédios)`)
-  check(initial.fauna >= 80, `fauna insuficiente no mundo (${initial.fauna} aves)`)
+  check(initial.cityVehicles >= 45, `tráfego urbano insuficiente (${initial.cityVehicles} carros)`)
+  check(initial.cityPoles > 100, `rede elétrica urbana insuficiente (${initial.cityPoles} postes)`)
+  check(initial.cityWireSpans > 50, `fios urbanos insuficientes (${initial.cityWireSpans} vãos)`)
+  check(initial.landingPerches === initial.cityPoles, 'nem todos os postes oferecem um ponto de pouso')
+  check(initial.macaws === 3, `deveria haver três espécies de araras (${initial.macaws})`)
+  check(initial.macawsDiscovered === 0, 'a tela inicial concedeu uma conquista de arara sem o jogador voar')
+  check(initial.fauna >= 190, `bandos insuficientes no lago, rio e cidades (${initial.fauna} aves)`)
   check(initial.flightAssist === true, 'assistência de voo não inicia ativada por padrão')
   await page.waitForTimeout(700)
   await page.screenshot({ path: `${out}/01-title.png` })
@@ -128,7 +140,11 @@ try {
   await page.locator('#play-btn').click()
   await page.waitForFunction(() => window.__game?.game?.state === 'playing')
   const before = await gameState(page)
-  await page.waitForTimeout(2200)
+  await page.waitForFunction(
+    seconds => window.__game?.game?.run?.seconds > seconds + 0.4,
+    before.seconds,
+    { timeout: 15_000, polling: 250 },
+  )
   const after = await gameState(page)
   const moved = Math.hypot(after.pos[0] - before.pos[0], after.pos[2] - before.pos[2])
   check(after.state === 'playing', `deveria estar voando, estado: ${after.state}`)
@@ -187,6 +203,68 @@ try {
   await page.waitForFunction(() => window.__game.game.state === 'title')
   check((await pageState(page)) === 'title', 'Voltar ao início não abriu o título')
   await page.screenshot({ path: `${out}/08-title-again.png` })
+  await page.close()
+
+  // Touch em retrato e paisagem, incluindo manche, ações, pausa e qualidade móvel.
+  const mobileErrors = []
+  const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: 'pt-BR' })
+  mobile.on('console', m => m.type() === 'error' && mobileErrors.push(m.text()))
+  mobile.on('pageerror', e => mobileErrors.push(String(e)))
+  await mobile.goto(url)
+  await mobile.waitForSelector('[data-screen="title"].is-active', { timeout: 60_000 })
+  const mobileSetup = await mobile.evaluate(() => ({
+    method: window.__game.input.method,
+    quality: window.__game.save.data.quality,
+    coarse: matchMedia('(pointer: coarse)').matches,
+    viewport: document.querySelector('meta[name="viewport"]')?.content,
+    titleFits: document.querySelector('.title-panel').getBoundingClientRect().right <= innerWidth + 1,
+  }))
+  check(mobileSetup.method === 'touch' && mobileSetup.coarse, `entrada touch não ativada (${mobileSetup.method}/${mobileSetup.coarse})`)
+  check(mobileSetup.quality === 'low', `preset mobile não reduziu qualidade (${mobileSetup.quality})`)
+  check(mobileSetup.viewport.includes('viewport-fit=cover') && mobileSetup.titleFits, 'viewport/área segura do título móvel incorretos')
+  await mobile.getByRole('button', { name: 'Escolher ave' }).click({ force: true })
+  check(await mobile.locator('[data-screen="birds"] [data-bird]').count() === 5, 'seletor mobile não mostrou as cinco aves')
+  await mobile.locator('[data-screen="birds"] button').last().click({ force: true })
+  await mobile.locator('#play-btn').click({ force: true })
+  await mobile.waitForFunction(() => window.__game.game.state === 'playing')
+  check(await mobile.evaluate(() => !document.pointerLockElement && getComputedStyle(document.querySelector('#touch-controls')).display !== 'none'), 'controles touch não apareceram ou pointer lock foi solicitado')
+  check(await mobile.locator('#touch-land').count() === 1, 'botão touch de pouso não foi criado')
+  await mobile.waitForTimeout(500)
+  check(await mobile.locator('#touch-land').evaluate(button => button.hidden), 'Pousar apareceu sem proximidade/velocidade de aproximação')
+  const cdp = await mobile.context().newCDPSession(mobile)
+  const stick = await mobile.locator('.touch-stick').boundingBox()
+  const sx = stick.x + stick.width / 2
+  const sy = stick.y + stick.height / 2
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 1, x: sx, y: sy, force: 1 }] })
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ id: 1, x: sx + 30, y: sy - 30, force: 1 }] })
+  await mobile.waitForFunction(() => window.__game.input.pitch > 0.1 && window.__game.input.bank < -0.1, { timeout: 5_000 })
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  await mobile.waitForFunction(() => Math.abs(window.__game.input.pitch) < 0.2 && Math.abs(window.__game.input.bank) < 0.2, { timeout: 5_000 })
+  const flap = await mobile.locator('#touch-flap').boundingBox()
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 2, x: flap.x + flap.width / 2, y: flap.y + flap.height / 2, force: 1 }] })
+  await mobile.waitForFunction(() => window.__game.input.flap, { timeout: 5_000 })
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  await mobile.waitForFunction(() => !window.__game.input.flap, { timeout: 5_000 })
+  const cameraBefore = (await gameState(mobile)).camera
+  await mobile.locator('#touch-camera').click({ force: true })
+  await mobile.waitForFunction(before => window.__game.game.rig.mode !== before, cameraBefore, { timeout: 5_000 })
+  check((await gameState(mobile)).camera !== cameraBefore, 'botão touch da câmera não funcionou')
+  const cruiseBefore = await mobile.evaluate(() => window.__game.game.flight.cruise)
+  await mobile.locator('#touch-cruise').click({ force: true })
+  await mobile.waitForFunction(before => window.__game.game.flight.cruise !== before, cruiseBefore, { timeout: 5_000 })
+  check(await mobile.evaluate(() => window.__game.game.flight.cruise) !== cruiseBefore, 'botão touch de cruzeiro não funcionou')
+  await mobile.locator('#touch-pause').click({ force: true })
+  await mobile.waitForSelector('[data-screen="pause"].is-active')
+  await mobile.getByRole('button', { name: 'Retomar voo' }).click({ force: true })
+  await mobile.waitForFunction(() => window.__game.game.state === 'playing')
+  await mobile.setViewportSize({ width: 844, height: 390 })
+  const landscapeFits = await mobile.evaluate(() => ['.touch-stick', '.touch-actions'].every(selector => {
+    const r = document.querySelector(selector).getBoundingClientRect()
+    return r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight
+  }))
+  check(landscapeFits, 'controles touch saíram da viewport em paisagem')
+  await mobile.close()
+  if (mobileErrors.length) throw new Error(`erros de console/rede no mobile:\n  ${mobileErrors.join('\n  ')}`)
 
   const broken = await browser.newPage({ viewport: { width: 1280, height: 720 }, locale: 'pt-BR' })
   await broken.addInitScript(() => {
