@@ -1,8 +1,8 @@
 import * as THREE from 'three'
 import type { Atmosphere } from './atmosphere'
 import { CITY_SITES } from './cityLayout'
-import type { HunterBody } from './hawks'
-import { hash2, heightAt, LAKE, surfaceAt } from './terrain'
+import { hash2, heightAt, LAKE, riverX, surfaceAt } from './terrain'
+import type { DiscoveryId } from './rules'
 
 type Mode = 'patrol' | 'curious' | 'scatter'
 
@@ -35,6 +35,7 @@ type Flock = {
 }
 
 type Hawk = { boid: Boid; thermal: number; angle: number; omega: number; climb: number }
+type Macaw = { id: Extract<DiscoveryId, `arara-${string}`>; boid: Boid; x: number; z: number; radius: number; angle: number; omega: number; color: number; discovered: boolean }
 
 function birdGeometry(): THREE.BufferGeometry {
   const pos: number[] = []
@@ -87,17 +88,17 @@ function birdGeometry(): THREE.BufferGeometry {
 
 export type FaunaEvents = {
   onCall(pan: number, kind: 'curious' | 'scatter'): void
+  onMacaw?(id: Extract<DiscoveryId, `arara-${string}`>, position: THREE.Vector3): void
 }
 
-const MAX = 180
+const MAX = 256
 
 export class Fauna {
   readonly mesh: THREE.InstancedMesh
   private readonly flocks: Flock[] = []
   private readonly hawks: Hawk[] = []
-  /** Gavião caçador controlado pelo HawkDirector; fica invisível quando inativo. */
-  readonly hunter: HunterBody = { pos: new THREE.Vector3(0, -500, 0), vel: new THREE.Vector3(0, 0, -1), bank: 0, flap: 0, active: false, fold: 0 }
-  private hunterIndex = 0
+  private readonly macaws: Macaw[] = []
+  private readonly knownDiscoveries: Set<DiscoveryId>
   private readonly phaseAttr: THREE.InstancedBufferAttribute
   private readonly flapAttr: THREE.InstancedBufferAttribute
   private readonly timeU = { value: 0 }
@@ -110,7 +111,8 @@ export class Fauna {
   companions = 0
   private callCooldown = 0
 
-  constructor(private readonly atm: Atmosphere, private readonly events: FaunaEvents) {
+  constructor(private readonly atm: Atmosphere, private readonly events: FaunaEvents, known: Iterable<DiscoveryId> = []) {
+    this.knownDiscoveries = new Set(known)
     const geo = birdGeometry()
     this.phaseAttr = new THREE.InstancedBufferAttribute(new Float32Array(MAX), 1)
     this.flapAttr = new THREE.InstancedBufferAttribute(new Float32Array(MAX), 1)
@@ -159,6 +161,12 @@ export class Fauna {
       { x: CITY_SITES[0].x, z: CITY_SITES[0].z, alt: 45, radius: 76, scale: 0.9, speed: 14, color: 0x858d98 }, // pombos
       { x: CITY_SITES[1].x, z: CITY_SITES[1].z, alt: 34, radius: 58, scale: 0.82, speed: 15, color: 0x4b9d56 }, // periquitos
       { x: CITY_SITES[2].x, z: CITY_SITES[2].z, alt: 30, radius: 68, scale: 0.62, speed: 12, color: 0x9a7550 }, // pardais
+      { x: LAKE.x + 240, z: LAKE.z + 65, alt: 23, radius: 82, scale: 0.6, speed: 11, color: 0x7b8c82 }, // aves na margem
+      { x: LAKE.x - 72, z: LAKE.z + 205, alt: 28, radius: 90, scale: 0.64, speed: 12, color: 0x9a8063 }, // aves aquáticas
+      { x: riverX(700), z: 700, alt: 32, radius: 112, scale: 0.58, speed: 13, color: 0x8b897c }, // corredor do rio
+      { x: CITY_SITES[0].x - 58, z: CITY_SITES[0].z + 54, alt: 28, radius: 50, scale: 0.48, speed: 12, color: 0x655b4d }, // andorinhas urbanas
+      { x: CITY_SITES[1].x + 40, z: CITY_SITES[1].z + 34, alt: 26, radius: 48, scale: 0.46, speed: 11, color: 0x8b765e },
+      { x: CITY_SITES[2].x - 48, z: CITY_SITES[2].z - 38, alt: 25, radius: 54, scale: 0.46, speed: 11, color: 0x87735b },
     ]
     let idx = 0
     for (const [id, anchor] of anchors.entries()) {
@@ -182,7 +190,7 @@ export class Fauna {
         maxSpeed: anchor.speed,
         color: anchor.color,
       }
-      for (let i = 0; i < count && idx < MAX - 4; i += 1) {
+      for (let i = 0; i < count && idx < MAX - 7; i += 1) {
         const b = this.makeBoid(flock.center.x, flock.center.y, flock.center.z, i + id * 40, id + i * 0.7)
         b.pos.add(b.offset)
         flock.boids.push(b)
@@ -193,6 +201,23 @@ export class Fauna {
       }
       idx += flock.boids.length
       this.flocks.push(flock)
+    }
+    const macawData: Array<{ id: Macaw['id']; color: number; city: number; angle: number; omega: number }> = [
+      { id: 'arara-azul', color: 0x0878e8, city: 0, angle: 0.7, omega: 0.19 },
+      { id: 'arara-vermelha', color: 0xe52d35, city: 1, angle: 2.8, omega: -0.17 },
+      { id: 'arara-amarela', color: 0xffd21c, city: 2, angle: 4.9, omega: 0.15 },
+    ]
+    for (const [i, data] of macawData.entries()) {
+      const site = CITY_SITES[data.city]
+      const radius = 38 + i * 5
+      const ground = Math.max(surfaceAt(site.x, site.z), 0)
+      const boid = this.makeBoid(site.x + Math.cos(data.angle) * radius, ground + 48 + i * 5, site.z + Math.sin(data.angle) * radius, 1000 + i, i + 10)
+      boid.flap = 0.8
+      this.macaws.push({ ...data, boid, x: site.x, z: site.z, radius, discovered: this.knownDiscoveries.has(data.id) })
+      this.col.setHex(data.color, THREE.SRGBColorSpace)
+      this.mesh.setColorAt(idx, this.col)
+      this.phaseAttr.array[idx] = boid.phase
+      idx += 1
     }
     // Gaviões planando sobre as térmicas.
     const th = this.atm.thermals
@@ -205,11 +230,6 @@ export class Fauna {
       this.mesh.setColorAt(idx, this.col)
       idx += 1
     }
-    // Gavião caçador: última instância, rufo e maior que os gaviões que planam.
-    this.hunterIndex = idx
-    this.col.setRGB(0.36, 0.2, 0.1, THREE.SRGBColorSpace)
-    this.mesh.setColorAt(idx, this.col)
-    idx += 1
     this.mesh.count = idx
     this.mesh.instanceColor!.needsUpdate = true
   }
@@ -218,8 +238,16 @@ export class Fauna {
     return this.mesh.count
   }
 
+  get macawCount(): number {
+    return this.macaws.length
+  }
+
+  get macawsDiscovered(): number {
+    return this.macaws.filter(macaw => macaw.discovered).length
+  }
+
   /** Aves mais próximas do jogador (para câmera/áudio), se houver. */
-  update(dt: number, time: number, playerPos: THREE.Vector3, playerVel: THREE.Vector3, playerForward: THREE.Vector3): void {
+  update(dt: number, time: number, playerPos: THREE.Vector3, playerVel: THREE.Vector3, playerForward: THREE.Vector3, allowMacawDiscoveries = true): void {
     this.timeU.value = time
     this.callCooldown -= dt
     const speed = playerVel.length()
@@ -232,28 +260,27 @@ export class Fauna {
         idx += 1
       }
     }
+    for (const macaw of this.macaws) {
+      macaw.angle += macaw.omega * dt
+      const x = macaw.x + Math.cos(macaw.angle) * macaw.radius
+      const z = macaw.z + Math.sin(macaw.angle) * macaw.radius
+      const macawIndex = this.macaws.indexOf(macaw)
+      macaw.boid.pos.set(x, Math.max(surfaceAt(x, z), 0) + 48 + macawIndex * 5 + Math.sin(macaw.angle * 2) * 3, z)
+      macaw.boid.vel.set(-Math.sin(macaw.angle) * macaw.omega * macaw.radius, 0, Math.cos(macaw.angle) * macaw.omega * macaw.radius)
+      this.writeBoid(idx++, macaw.boid, 3.2, dt)
+      if (allowMacawDiscoveries && !macaw.discovered && macaw.boid.pos.distanceTo(playerPos) <= 24) {
+        macaw.discovered = true
+        this.events.onMacaw?.(macaw.id, macaw.boid.pos.clone())
+      }
+    }
     for (const h of this.hawks) {
       this.updateHawk(h, dt)
       this.writeBoid(idx, h.boid, 2.2, dt)
       idx += 1
     }
-    this.writeHunter()
     this.mesh.instanceMatrix.needsUpdate = true
     this.phaseAttr.needsUpdate = true
     this.flapAttr.needsUpdate = true
-  }
-
-  private writeHunter(): void {
-    const h = this.hunter
-    const v = h.vel
-    const hs = Math.hypot(v.x, v.z)
-    this.e.set(Math.atan2(v.y, Math.max(hs, 0.1)), Math.atan2(-v.x, -v.z), h.bank, 'YXZ')
-    this.q.setFromEuler(this.e)
-    const s = h.active ? 2.7 : 0.0001
-    this.sc.set(s * (1 - 0.5 * h.fold), s, s * (1 + 0.15 * h.fold))
-    this.m.compose(h.pos, this.q, this.sc)
-    this.mesh.setMatrixAt(this.hunterIndex, this.m)
-    this.flapAttr.array[this.hunterIndex] = h.flap
   }
 
   private writeBoid(i: number, b: Boid, scale: number, dt: number): void {

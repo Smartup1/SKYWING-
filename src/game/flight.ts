@@ -15,8 +15,6 @@ export type FlightInput = {
   flapPressed: boolean
   /** Impulsionar (bater asas mais forte e rápido). */
   boost: boolean
-  /** Segurando "pousar": freio aerodinâmico e arredondamento automático perto da superfície. */
-  land?: boolean
 }
 
 export type FlightEnv = {
@@ -24,27 +22,20 @@ export type FlightEnv = {
   surface(x: number, z: number): number
   /** Velocidade do ar (m/s) em x, y, z. */
   wind(out: THREE.Vector3, x: number, y: number, z: number): void
-  /** Altura do topo de uma edificação sob (x, z), ou -Infinity. */
-  roof?(x: number, z: number): number
-  /** Empurra para fora de uma edificação; devolve true se havia penetração. */
-  wall?(x: number, y: number, z: number, margin: number, out: WallHit): boolean
 }
-
-export type WallHit = { nx: number; nz: number; depth: number; top: number }
 
 export type FlightEvent =
   | { type: 'flap'; power: number }
   | { type: 'takeoff' }
-  | { type: 'land'; hs: number; down: number }
-  | { type: 'bump'; impact: number }
+  | { type: 'land' }
+  | { type: 'perch' }
   | { type: 'skim'; speed: number }
   | { type: 'crash'; impact: number }
   | { type: 'stall' }
 
-export const NO_INPUT: FlightInput = { pitch: 0, bank: 0, roll: 0, flap: false, flapPressed: false, boost: false, land: false }
+export const NO_INPUT: FlightInput = { pitch: 0, bank: 0, roll: 0, flap: false, flapPressed: false, boost: false }
 
-export const BELLY = 0.32
-const WALL_MARGIN = 0.55
+const BELLY = 0.32
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v)
 const wrapPi = (a: number) => Math.atan2(Math.sin(a), Math.cos(a))
 
@@ -68,6 +59,7 @@ export class FlightModel {
   roll = 0
   stamina = CONFIG.stamina.max
   grounded = false
+  perched = false
   stalled = false
   cruise = true
   /** Ajuda opcional para manter atitude e velocidade mais estáveis; ativa por padrão. */
@@ -86,12 +78,6 @@ export class FlightModel {
   gLoad = 1
   /** Segundos desde o último contato com o solo. */
   airborneTime = 0
-  /** Assistente de pouso ativo neste instante (tecla segurada). */
-  landing = false
-  /** Altura da superfície de apoio (terreno ou telhado) logo abaixo. */
-  floorY = 0
-  private prevY = 0
-  private readonly hit: WallHit = { nx: 0, nz: 0, depth: 0, top: 0 }
 
   private readonly air = new THREE.Vector3()
   private readonly rel = new THREE.Vector3()
@@ -113,6 +99,7 @@ export class FlightModel {
     this.vel.copy(this.forward).multiplyScalar(speed)
     this.stamina = CONFIG.stamina.max
     this.grounded = false
+    this.perched = false
     this.stalled = false
     this.flapPhase = 0
     this.flapping = false
@@ -122,6 +109,26 @@ export class FlightModel {
 
   get speed(): number {
     return this.vel.length()
+  }
+
+  /** Pouso assistido em um poleiro selecionado; bater asas volta ao voo. */
+  landOnPerch(position: THREE.Vector3, yaw: number, events: FlightEvent[]): void {
+    this.pos.copy(position)
+    this.yaw = yaw
+    this.pitch = 0
+    this.roll = 0
+    this.vel.set(0, 0, 0)
+    this.grounded = true
+    this.perched = true
+    this.stalled = false
+    this.flapPhase = 0
+    this.flapping = false
+    this.boosting = false
+    this.airspeed = 0
+    this.airLift = 0
+    this.gLoad = 1
+    this.updateBasis()
+    events.push({ type: 'perch' })
   }
 
   get groundSpeed(): number {
@@ -145,18 +152,15 @@ export class FlightModel {
     const F = CONFIG.flight
     const S = CONFIG.stamina
     this.updateBasis()
-    const surface = this.floorAt(env, this.pos.x, this.pos.z, this.pos.y)
-    this.floorY = surface
+    const surface = env.surface(this.pos.x, this.pos.z)
     this.agl = this.pos.y - surface
-    this.prevY = this.pos.y
 
     if (this.grounded) {
-      this.landing = false
-      this.stepGround(dt, inp, env, events)
+      if (this.perched) this.stepPerch(dt, inp, events)
+      else this.stepGround(dt, inp, surface, events)
       return
     }
     this.airborneTime += dt
-    this.landing = !!inp.land
 
     env.wind(this.air, this.pos.x, this.pos.y, this.pos.z)
     this.rel.copy(this.vel).sub(this.air)
@@ -196,7 +200,7 @@ export class FlightModel {
     // --- Batidas de asa ---------------------------------------------------------------------
     const clearance = this.agl
     const tired = this.stamina <= 0 ? 0.2 : this.stamina < 18 ? 0.55 : 1
-    const auto = (this.cruise || this.assisted) && !this.landing && !inp.flap && !inp.boost && this.autoFlap(inp, s, clearance)
+    const auto = (this.cruise || this.assisted) && !inp.flap && !inp.boost && this.autoFlap(inp, s, clearance)
     const want = inp.flap || inp.boost || auto
     this.boosting = inp.boost && this.stamina > 2
     const boostMul = this.boosting ? F.boostMult : 1
@@ -227,9 +231,6 @@ export class FlightModel {
     }
     this.stamina = clamp(this.stamina, 0, S.max)
 
-    // Assistente de pouso: freio aerodinâmico e descida controlada que suaviza o toque.
-    if (this.landing) this.landingAssist(s)
-
     // Teto: o ar rarefeito empurra para baixo.
     if (this.pos.y > F.ceiling) this.acc.y -= (this.pos.y - F.ceiling) * 0.6
 
@@ -250,8 +251,7 @@ export class FlightModel {
       const climbFactor = this.assisted && this.stalled && inp.pitch > 0 ? 0.18 : this.stalled && inp.pitch > 0 ? 0.4 : 1
       this.pitch += inp.pitch * F.pitchRate * dt * climbFactor
     } else {
-      const flare = this.landing ? clamp((8 - this.agl) / 8, 0, 1) * 0.3 : 0
-      const target = this.stalled ? gammaAir - (this.assisted ? 0.14 : 0.05) : gammaAir + trim + flare
+      const target = this.stalled ? gammaAir - (this.assisted ? 0.14 : 0.05) : gammaAir + trim
       this.pitch += (target - this.pitch) * Math.min(1, (this.assisted ? 2.6 : 1.7) * dt)
     }
     const pitchLimit = this.assisted ? 1.12 : 1.45
@@ -299,82 +299,21 @@ export class FlightModel {
     return this.vel.y < -0.9 && clearance < 180 && s < F.cruiseSpeed * 1.5
   }
 
-  /** Superfície de apoio sob (x, z): telhado se o pássaro está acima dele, senão o terreno. */
-  private floorAt(env: FlightEnv, x: number, z: number, y: number): number {
-    const terrain = env.surface(x, z)
-    if (!env.roof) return terrain
-    const roof = env.roof(x, z)
-    return roof > -Infinity && y >= roof - 0.9 ? Math.max(terrain, roof) : terrain
-  }
-
-  private landingAssist(s: number): void {
-    // Freio: desacelera até ~5 m/s sem estolar.
-    if (s > 4.5) this.acc.addScaledVector(this.dir, -(1.2 + 0.4 * s))
-    // Razão de descida alvo diminui perto da superfície (arredondamento).
-    const w = clamp((30 - this.agl) / 10, 0, 1)
-    if (w > 0) {
-      const target = -clamp(0.7 + this.agl * 0.2, 0.7, 4.5)
-      this.acc.y += (target - this.vel.y) * 2.6 * w
-    }
-  }
-
-  private collideWalls(env: FlightEnv, events: FlightEvent[]): void {
-    if (!env.wall) return
-    const h = this.hit
-    for (let i = 0; i < 4; i += 1) {
-      if (!env.wall(this.pos.x, this.pos.y, this.pos.z, WALL_MARGIN, h)) return
-      // Vindo de cima do telhado: é pouso/colisão com o chão, não parede.
-      if (this.prevY >= h.top - 0.9) return
-      this.pos.x += h.nx * h.depth
-      this.pos.z += h.nz * h.depth
-      const vn = this.vel.x * h.nx + this.vel.z * h.nz
-      if (vn < 0) {
-        const impact = -vn
-        this.vel.x -= h.nx * vn * 1.25
-        this.vel.z -= h.nz * vn * 1.25
-        if (impact > 6) {
-          events.push({ type: 'crash', impact })
-          this.stamina = Math.max(0, this.stamina - 14)
-          this.vel.y = Math.min(this.vel.y, 0) * 0.5
-          this.pitch = Math.max(this.pitch, 0.15)
-        } else if (impact > 1.5) {
-          events.push({ type: 'bump', impact })
-        }
-      }
-    }
-  }
-
-  /** Impulso externo (golpe de gavião): muda a velocidade, tira o nariz do lugar e custa fôlego. */
-  knock(dx: number, dz: number, strength: number): void {
-    this.vel.x += dx * strength
-    this.vel.z += dz * strength
-    this.vel.y = Math.min(this.vel.y, 0) - strength * 0.5
-    this.pitch = -0.7
-    this.stamina = Math.max(0, this.stamina - 35)
-    this.grounded = false
-  }
-
   private contact(dt: number, env: FlightEnv, events: FlightEvent[]): void {
-    this.collideWalls(env, events)
-    const surface = this.floorAt(env, this.pos.x, this.pos.z, this.prevY)
+    const surface = env.surface(this.pos.x, this.pos.z)
     const floor = surface + BELLY
-    this.floorY = surface
     if (this.pos.y >= floor) return
     const hs = Math.hypot(this.vel.x, this.vel.z)
     const down = -this.vel.y
-    // Com o assistente (tecla ou pouso automático lento) o toque tolera mais velocidade.
-    const soft = this.landing || (this.assisted && hs < 12.5)
-    const maxDown = soft ? 8.5 : 6.5
-    const skimSpeed = this.landing ? 14 : 9
     this.pos.y = floor
-    if (down > maxDown || (hs > 11 && this.pitch < -0.55 && down > 3)) {
+    if (down > 6.5 || (hs > 11 && this.pitch < -0.55 && down > 3)) {
       events.push({ type: 'crash', impact: Math.max(down, hs * 0.4) })
       this.vel.y = down * 0.22
       this.vel.x *= 0.55
       this.vel.z *= 0.55
       this.stamina = Math.max(0, this.stamina - 14)
       this.pitch = Math.max(this.pitch, 0.2)
-    } else if (hs > skimSpeed) {
+    } else if (hs > 9) {
       // Rasante: roça a superfície sem pousar.
       events.push({ type: 'skim', speed: hs })
       this.vel.y = Math.max(this.vel.y, 0)
@@ -385,11 +324,36 @@ export class FlightModel {
       this.flapPhase = 0
       this.flapping = false
       this.stalled = false
-      events.push({ type: 'land', hs, down: Math.max(0, down) })
+      events.push({ type: 'land' })
     }
   }
 
-  private stepGround(dt: number, inp: FlightInput, env: FlightEnv, events: FlightEvent[]): void {
+  private stepPerch(dt: number, inp: FlightInput, events: FlightEvent[]): void {
+    this.vel.set(0, 0, 0)
+    this.stamina = Math.min(CONFIG.stamina.max, this.stamina + CONFIG.stamina.restRecover * this.profile.recovery * dt)
+    this.pitch += (0 - this.pitch) * Math.min(1, 6 * dt)
+    this.roll += (0 - this.roll) * Math.min(1, 6 * dt)
+    this.flapPhase = 0
+    this.flapping = false
+    this.boosting = false
+    this.stalled = false
+    if (inp.flapPressed && this.stamina > 6) {
+      const fx = -Math.sin(this.yaw)
+      const fz = -Math.cos(this.yaw)
+      this.perched = false
+      this.grounded = false
+      this.vel.set(fx * 4.5, 6.2, fz * 4.5)
+      this.pos.y += 0.3
+      this.pitch = 0.45
+      this.stamina -= 8 * this.profile.staminaUse
+      this.flapPhase = 0.0001
+      this.airborneTime = 0
+      events.push({ type: 'takeoff' }, { type: 'flap', power: 1.3 })
+    }
+    this.updateBasis()
+  }
+
+  private stepGround(dt: number, inp: FlightInput, surface: number, events: FlightEvent[]): void {
     this.airspeed = 0
     this.stalled = false
     this.yaw += inp.bank * 1.7 * dt
@@ -398,20 +362,6 @@ export class FlightModel {
     const walk = inp.pitch < 0 ? 2.1 : inp.pitch > 0 ? -1.0 : 0
     this.vel.set(fx * walk, 0, fz * walk)
     this.pos.addScaledVector(this.vel, dt)
-    this.prevY = this.pos.y
-    this.collideWalls(env, events)
-    const surface = this.floorAt(env, this.pos.x, this.pos.z, this.pos.y)
-    this.floorY = surface
-    // Andou além da borda do telhado: cai e abre as asas.
-    if (surface < this.pos.y - BELLY - 0.6) {
-      this.grounded = false
-      this.vel.set(fx * 2.5, -0.5, fz * 2.5)
-      this.airborneTime = 0
-      this.flapPhase = 0.0001
-      this.pitch = 0.1
-      this.updateBasis()
-      return
-    }
     this.pos.y = surface + BELLY
     this.pitch += (0 - this.pitch) * Math.min(1, 6 * dt)
     this.roll += (0 - this.roll) * Math.min(1, 6 * dt)

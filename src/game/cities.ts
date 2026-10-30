@@ -1,483 +1,720 @@
 import * as THREE from 'three'
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
-import { CityColliders, generateCity, LANE_STEP, localToWorld, type Building, type CityData, type Lane, type Perch } from './cityData'
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import { CITY_SITES, type CitySite } from './cityLayout'
-import { hash2, surfaceAt } from './terrain'
+import { hash2, heightAt, surfaceAt } from './terrain'
 
-const ROAD_SPEC = {
-  0: { asphalt: 9.0, sidewalk: 3.0, curbHeight: 0.18, laneWidth: 3.5, centerLine: 'double-yellow' as const, edgeLines: true, hasParking: false },
-  1: { asphalt: 6.4, sidewalk: 1.8, curbHeight: 0.15, laneWidth: 3.0, centerLine: 'dashed-white' as const, edgeLines: false, hasParking: false },
-  2: { asphalt: 3.2, sidewalk: 0, curbHeight: 0, laneWidth: 3.2, centerLine: 'none' as const, edgeLines: false, hasParking: false },
-} as const
-
-const ASPHALT_DARK = 0x2a2e33
-const ASPHALT_MID = 0x363b41
-const ASPHALT_LIGHT = 0x45494e
-const SIDEWALK_COLOR = 0x9a978c
-const CURB_COLOR = 0xb8b4a8
-const LINE_YELLOW = 0xd4b23a
-const LINE_WHITE = 0xd8d4c4
-
-const _m = new THREE.Matrix4()
-const _q = new THREE.Quaternion()
-const _e = new THREE.Euler()
-const _v = new THREE.Vector3()
-<<<<<<< HEAD
-const _scale = new THREE.Vector3()
-=======
->>>>>>> 795b639e012abf732208c865466f8376e73b67ad
-const _col = new THREE.Color()
-
-function composeMatrix(x: number, y: number, z: number, ry: number, sx = 1, sy = 1, sz = 1): THREE.Matrix4 {
-  _v.set(x, y, z)
-  _e.set(0, ry, 0)
-  _q.setFromEuler(_e)
-<<<<<<< HEAD
-  return _m.compose(_v, _q, _scale.set(sx, sy, sz))
-=======
-  return _m.compose(_v, _q, _v.set(sx, sy, sz))
->>>>>>> 795b639e012abf732208c865466f8376e73b67ad
-}
-
-type Intersection = { x: number; z: number; size: number; tier: 0 | 1 | 2 }
-
-function findIntersections(lanes: readonly Lane[]): Intersection[] {
-  const out: Intersection[] = []
-  const seen = new Set<string>()
-
-  for (let i = 0; i < lanes.length; i += 1) {
-    const a = lanes[i]
-    const adx = a.bx - a.ax
-    const adz = a.bz - a.az
-    const alen = Math.hypot(adx, adz)
-    if (alen < 0.1) continue
-    const aux = adx / alen, auz = adz / alen
-
-    for (let j = i + 1; j < lanes.length; j += 1) {
-      const b = lanes[j]
-      if (Math.abs(a.tier - b.tier) > 1) continue
-
-      const bdx = b.bx - b.ax
-      const bdz = b.bz - b.az
-      const blen = Math.hypot(bdx, bdz)
-      if (blen < 0.1) continue
-      const bux = bdx / blen, buz = bdz / blen
-
-      const dot = Math.abs(aux * bux + auz * buz)
-      if (dot > 0.5) continue
-
-      const denom = aux * buz - auz * bux
-      if (Math.abs(denom) < 1e-4) continue
-      const t = ((b.ax - a.ax) * buz - (b.az - a.az) * bux) / denom
-      const s = ((b.ax - a.ax) * auz - (b.az - a.az) * aux) / denom
-
-      if (t < -0.02 || t > 1.02 || s < -0.02 || s > 1.02) continue
-
-      const cx = a.ax + adx * t
-      const cz = a.az + adz * t
-
-      const key = `${Math.round(cx / 4)},${Math.round(cz / 4)}`
-      if (seen.has(key)) continue
-      seen.add(key)
-
-      const wA = ROAD_SPEC[a.tier].asphalt
-      const wB = ROAD_SPEC[b.tier].asphalt
-      const size = Math.max(wA, wB) + 0.4
-      const tier = Math.min(a.tier, b.tier) as 0 | 1 | 2
-
-      out.push({ x: cx, z: cz, size, tier })
-    }
-  }
-  return out
-}
-
-type RoadLayerBuffers = {
-  asphalt: { positions: number[]; indices: number[]; colors: number[] }
-  sidewalk: { positions: number[]; indices: number[]; colors: number[] }
-  curb: { positions: number[]; indices: number[]; colors: number[] }
-  lines: { positions: number[]; indices: number[]; colors: number[] }
-  intersection: { positions: number[]; indices: number[]; colors: number[] }
-  crosswalk: { positions: number[]; indices: number[]; colors: number[] }
-}
-
-function newLayer(): { positions: number[]; indices: number[]; colors: number[] } {
-  return { positions: [], indices: [], colors: [] }
-}
-
-function newBuffers(): RoadLayerBuffers {
-  return {
-    asphalt: newLayer(),
-    sidewalk: newLayer(),
-    curb: newLayer(),
-    lines: newLayer(),
-    intersection: newLayer(),
-    crosswalk: newLayer(),
-  }
-}
-
-function pushQuad(
-  layer: { positions: number[]; indices: number[]; colors: number[] },
-  x0: number, z0: number, y0: number,
-  x1: number, z1: number, y1: number,
-  x2: number, z2: number, y2: number,
-  x3: number, z3: number, y3: number,
-  color: THREE.Color,
-): void {
-  const base = layer.positions.length / 3
-  layer.positions.push(
-    x0, y0, z0,
-    x1, y1, z1,
-    x2, y2, z2,
-    x3, y3, z3,
-  )
-  for (let k = 0; k < 4; k += 1) layer.colors.push(color.r, color.g, color.b)
-  layer.indices.push(base, base + 1, base + 2, base, base + 2, base + 3)
-}
-
-function pushRibbon(
-  layer: { positions: number[]; indices: number[]; colors: number[] },
-  a: [number, number], b: [number, number],
-  width: number, yLift: number, offsetLateral: number, color: THREE.Color,
-  step: number,
-): void {
-  const dx = b[0] - a[0]
-  const dz = b[1] - a[1]
-  const len = Math.hypot(dx, dz)
-  if (len < 0.01) return
-  const ux = dx / len, uz = dz / len
-  const px = -uz, pz = ux
-
-  const segs = Math.max(1, Math.ceil(len / step))
-  for (let i = 0; i < segs; i += 1) {
-    const t0 = i / segs
-    const t1 = (i + 1) / segs
-    const ax = a[0] + dx * t0 + px * offsetLateral
-    const az = a[1] + dz * t0 + pz * offsetLateral
-    const bx = a[0] + dx * t1 + px * offsetLateral
-    const bz = a[1] + dz * t1 + pz * offsetLateral
-
-    const half = width / 2
-    const p0x = ax + px * half, p0z = az + pz * half
-    const p1x = ax - px * half, p1z = az - pz * half
-    const p2x = bx - px * half, p2z = bz - pz * half
-    const p3x = bx + px * half, p3z = bz + pz * half
-
-    const y0 = surfaceAt(p0x, p0z) + yLift
-    const y1 = surfaceAt(p1x, p1z) + yLift
-    const y2 = surfaceAt(p2x, p2z) + yLift
-    const y3 = surfaceAt(p3x, p3z) + yLift
-
-<<<<<<< HEAD
-    // A face superior precisa ter normal voltada para +Y; a ordem original
-    // deixava as fitas de asfalto e sinalização invisíveis por back-face culling.
-    pushQuad(layer, p0x, p0z, y0, p3x, p3z, y3, p2x, p2z, y2, p1x, p1z, y1, color)
-=======
-    pushQuad(layer, p0x, p0z, y0, p1x, p1z, y1, p2x, p2z, y2, p3x, p3z, y3, color)
->>>>>>> 795b639e012abf732208c865466f8376e73b67ad
-  }
-}
-
-function pushSidewalk(
-  sidewalkLayer: { positions: number[]; indices: number[]; colors: number[] },
-  curbLayer: { positions: number[]; indices: number[]; colors: number[] },
-  a: [number, number], b: [number, number],
-  asphaltHalfWidth: number, sidewalkWidth: number, curbHeight: number,
-  color: THREE.Color, curbColor: THREE.Color,
-): void {
-  if (sidewalkWidth <= 0) return
-  const dx = b[0] - a[0]
-  const dz = b[1] - a[1]
-  const len = Math.hypot(dx, dz)
-  if (len < 0.01) return
-  const ux = dx / len, uz = dz / len
-  const px = -uz, pz = ux
-
-  for (const side of [-1, 1]) {
-    const innerOffset = (asphaltHalfWidth + 0.02) * side
-    const outerOffset = (asphaltHalfWidth + sidewalkWidth) * side
-
-    const ax = a[0] + px * innerOffset
-    const az = a[1] + pz * innerOffset
-    const bx = b[0] + px * innerOffset
-    const bz = b[1] + pz * innerOffset
-    const cx = b[0] + px * outerOffset
-    const cz = b[1] + pz * outerOffset
-    const ex = a[0] + px * outerOffset
-    const ez = a[1] + pz * outerOffset
-
-    const ya_in = surfaceAt(ax, az) + curbHeight
-    const yb_in = surfaceAt(bx, bz) + curbHeight
-    const yc = surfaceAt(cx, cz) + curbHeight
-    const ye = surfaceAt(ex, ez) + curbHeight
-
-    pushQuad(sidewalkLayer, ex, ez, ye, ax, az, ya_in, bx, bz, yb_in, cx, cz, yc, color)
-
-    const ya_in0 = surfaceAt(ax, az) + 0.02
-    const yb_in0 = surfaceAt(bx, bz) + 0.02
-    pushQuad(curbLayer, ax, az, ya_in0, ax, az, ya_in, bx, bz, yb_in, bx, bz, yb_in0, curbColor)
-  }
-}
-
-function pushDoubleYellow(
-  layer: { positions: number[]; indices: number[]; colors: number[] },
-  a: [number, number], b: [number, number],
-  yLift: number, color: THREE.Color,
-): void {
-  pushRibbon(layer, a, b, 0.12, yLift, -0.18, color, 4)
-  pushRibbon(layer, a, b, 0.12, yLift, 0.18, color, 4)
-}
-
-function pushDashedWhite(
-  layer: { positions: number[]; indices: number[]; colors: number[] },
-  a: [number, number], b: [number, number],
-  yLift: number, color: THREE.Color,
-): void {
-  const dx = b[0] - a[0], dz = b[1] - a[1]
-  const len = Math.hypot(dx, dz)
-  if (len < 0.01) return
-  const ux = dx / len, uz = dz / len
-  const dash = 3, gap = 3
-  for (let s = 0; s < len; s += dash + gap) {
-    const s1 = Math.min(len, s + dash)
-    pushRibbon(layer, [a[0] + ux * s, a[1] + uz * s], [a[0] + ux * s1, a[1] + uz * s1], 0.12, yLift, 0, color, 4)
-  }
-}
-
-function pushEdgeLines(
-  layer: { positions: number[]; indices: number[]; colors: number[] },
-  a: [number, number], b: [number, number],
-  halfWidth: number, yLift: number, color: THREE.Color,
-): void {
-  pushRibbon(layer, a, b, 0.1, yLift, -(halfWidth - 0.15), color, 4)
-  pushRibbon(layer, a, b, 0.1, yLift, halfWidth - 0.15, color, 4)
-}
-
-function pushIntersectionSquare(
-  layer: { positions: number[]; indices: number[]; colors: number[] },
-  cx: number, cz: number, size: number, yLift: number, color: THREE.Color,
-): void {
-  const h = size / 2
-  const y = surfaceAt(cx, cz) + yLift
-  pushQuad(layer, cx - h, cz - h, y, cx - h, cz + h, y, cx + h, cz + h, y, cx + h, cz - h, y, color)
-}
-
-function pushCrosswalk(
-  layer: { positions: number[]; indices: number[]; colors: number[] },
-  cx: number, cz: number, size: number, roadWidth: number,
-  side: 'north' | 'south' | 'east' | 'west',
-  yLift: number, color: THREE.Color,
-): void {
-  const stripeW = 0.5
-  const gap = 0.45
-  const count = Math.floor((roadWidth - 0.4) / (stripeW + gap))
-  const span = count * (stripeW + gap) - gap
-  const start = -span / 2
-  const stripDepth = 2.2
-  const h = size / 2 + stripDepth / 2 + 0.1
-
-  for (let i = 0; i < count; i += 1) {
-    const offset = start + i * (stripeW + gap)
-    let x0 = 0, z0 = 0, x1 = 0, z1 = 0
-    if (side === 'north') {
-      x0 = cx + offset; z0 = cz - h - stripDepth / 2
-      x1 = cx + offset; z1 = cz - h + stripDepth / 2
-      const y = surfaceAt(x0, z0) + yLift
-      pushQuad(layer, x0 - stripeW / 2, z0, y, x0 - stripeW / 2, z1, y, x0 + stripeW / 2, z1, y, x0 + stripeW / 2, z0, y, color)
-    } else if (side === 'south') {
-      x0 = cx + offset; z0 = cz + h - stripDepth / 2
-      x1 = cx + offset; z1 = cz + h + stripDepth / 2
-      const y = surfaceAt(x0, z0) + yLift
-      pushQuad(layer, x0 - stripeW / 2, z0, y, x0 - stripeW / 2, z1, y, x0 + stripeW / 2, z1, y, x0 + stripeW / 2, z0, y, color)
-    } else if (side === 'east') {
-      x0 = cx + h - stripDepth / 2; z0 = cz + offset
-      x1 = cx + h + stripDepth / 2; z1 = cz + offset
-      const y = surfaceAt(x0, z0) + yLift
-      pushQuad(layer, x0, z0 - stripeW / 2, y, x0, z0 + stripeW / 2, y, x1, z1 + stripeW / 2, y, x1, z1 - stripeW / 2, y, color)
-    } else {
-      x0 = cx - h - stripDepth / 2; z0 = cz + offset
-      x1 = cx - h + stripDepth / 2; z1 = cz + offset
-      const y = surfaceAt(x0, z0) + yLift
-      pushQuad(layer, x0, z0 - stripeW / 2, y, x0, z0 + stripeW / 2, y, x1, z1 + stripeW / 2, y, x1, z1 - stripeW / 2, y, color)
-    }
-  }
-}
-
-function layerToGeometry(layer: { positions: number[]; indices: number[]; colors: number[] }): THREE.BufferGeometry {
-  const g = new THREE.BufferGeometry()
-  g.setAttribute('position', new THREE.Float32BufferAttribute(layer.positions, 3))
-  g.setAttribute('color', new THREE.Float32BufferAttribute(layer.colors, 3))
-  g.setIndex(layer.indices)
-  g.computeVertexNormals()
-  return g
-}
-
-const CAR_COLORS = [0xc0392b, 0x2e6da4, 0xe8e2d0, 0x2b2f33, 0xd6a02c, 0x3f8f5b, 0x8a8f96, 0x7a3b8c]
-const TREE_TONES = [0x3f7d3a, 0x4d8c3f, 0x2f6b3c, 0x5b9a45, 0x6a9a3a]
-
-type Car = {
-  lane: number
-  t: number
-  dir: 1 | -1
-  lateral: number
-  speed: number
+type Building = {
+  x: number
+  z: number
+  ground: number
+  width: number
+  depth: number
+  height: number
+  rotation: number
+  roof: boolean
   color: number
-  wheelSpin: number
+  roofColor: number
+  windowCount: number
+}
+type TrafficVehicle = {
+  site: CitySite
+  axis: 'x' | 'z'
+  line: number
+  direction: 1 | -1
+  min: number
+  span: number
+  speed: number
+  phase: number
+  scale: number
+  color: number
 }
 
-function makeCar(color: number): THREE.Group {
-  const group = new THREE.Group()
-  const bodyMaterial = new THREE.MeshStandardMaterial({ color, roughness: 0.52, metalness: 0.25 })
-  const trimMaterial = new THREE.MeshStandardMaterial({ color: 0x1c1d22, roughness: 0.8, metalness: 0.4 })
-  const glassMaterial = new THREE.MeshStandardMaterial({ color: 0x8eaac0, roughness: 0.18, metalness: 0.55, transparent: true, opacity: 0.8 })
-  const lightMaterial = new THREE.MeshStandardMaterial({ color: 0xf6f0d0, emissive: 0xffe7a6, emissiveIntensity: 0.8, roughness: 0.35 })
-  const wheelMaterial = new THREE.MeshStandardMaterial({ color: 0x181818, roughness: 0.9, metalness: 0.25 })
-  ;(group.userData as { materials?: THREE.Material[] }).materials = [
-    bodyMaterial, trimMaterial, glassMaterial, lightMaterial, wheelMaterial,
-  ]
+const _matrix = new THREE.Matrix4()
+const _quaternion = new THREE.Quaternion()
+const _rotation = new THREE.Euler()
+const _scale = new THREE.Vector3()
+const _position = new THREE.Vector3()
 
-  const chassisGeo = new THREE.BoxGeometry(2.0, 0.7, 4.2)
-  const cabinGeo = new THREE.BoxGeometry(1.7, 0.7, 2.0)
-  const hoodGeo = new THREE.BoxGeometry(1.6, 0.36, 1.2)
-  const rearGeo = new THREE.BoxGeometry(1.5, 0.36, 0.9)
-  const roofGeo = new THREE.BoxGeometry(1.3, 0.2, 1.3)
-  const lampGeo = new THREE.BoxGeometry(0.2, 0.16, 0.3)
-  const tailGeo = new THREE.BoxGeometry(0.16, 0.16, 0.3)
-  const wheelGeo = new THREE.CylinderGeometry(0.38, 0.38, 0.26, 16)
-  ;(group.userData as { geometries?: THREE.BufferGeometry[] }).geometries = [
-    chassisGeo, cabinGeo, hoodGeo, rearGeo, roofGeo, lampGeo, tailGeo, wheelGeo,
-  ]
+function boxAssembly(parts: { size: [number, number, number]; at: [number, number, number] }[]): THREE.BufferGeometry {
+  const pieces = parts.map(({ size, at }) => new THREE.BoxGeometry(...size).translate(...at))
+  const geometry = mergeGeometries(pieces, false)
+  pieces.forEach(piece => piece.dispose())
+  if (!geometry) throw new Error('Não foi possível montar os detalhes de fachada')
+  return geometry
+}
 
-  const chassis = new THREE.Mesh(chassisGeo, bodyMaterial)
-  chassis.position.y = 0.72
-  group.add(chassis)
+const WINDOW_FRAME = boxAssembly([
+  { size: [0.065, 0.92, 0.07], at: [-0.34, 0, 0] },
+  { size: [0.065, 0.92, 0.07], at: [0.34, 0, 0] },
+  { size: [0.74, 0.065, 0.07], at: [0, -0.43, 0] },
+  { size: [0.74, 0.065, 0.07], at: [0, 0.43, 0] },
+  { size: [0.032, 0.78, 0.07], at: [0, 0, 0] },
+  { size: [0.68, 0.032, 0.07], at: [0, 0, 0] },
+])
 
-  const cabin = new THREE.Mesh(cabinGeo, glassMaterial)
-  cabin.position.set(0, 1.12, -0.18)
-  group.add(cabin)
+function localToWorld(site: CitySite, x: number, z: number): [number, number] {
+  const a = site.seed * 0.017
+  const c = Math.cos(a)
+  const s = Math.sin(a)
+  return [site.x + x * c + z * s, site.z - x * s + z * c]
+}
 
-  const hood = new THREE.Mesh(hoodGeo, trimMaterial)
-  hood.position.set(0, 0.8, 1.45)
-  group.add(hood)
+function addRoadQuad(out: number[], site: CitySite, a: [number, number], b: [number, number], width: number, lift: number): void {
+  const [ax, az] = localToWorld(site, a[0], a[1])
+  const [bx, bz] = localToWorld(site, b[0], b[1])
+  const dx = bx - ax
+  const dz = bz - az
+  const length = Math.hypot(dx, dz) || 1
+  const nx = (-dz / length) * width * 0.5
+  const nz = (dx / length) * width * 0.5
+  const corners: [number, number][] = [[ax + nx, az + nz], [ax - nx, az - nz], [bx - nx, bz - nz], [bx + nx, bz + nz]]
+  const first = out.length / 3
+  for (const [x, z] of corners) out.push(x, surfaceAt(x, z) + lift, z)
+  // Faces voltadas para +Y: a cidade é observada principalmente de cima e em rasante.
+  roadIndices.push(first, first + 2, first + 1, first, first + 3, first + 2)
+}
 
-  const rear = new THREE.Mesh(rearGeo, trimMaterial)
-  rear.position.set(0, 0.8, -1.6)
-  group.add(rear)
+const roadIndices: number[] = []
 
-  const roof = new THREE.Mesh(roofGeo, trimMaterial)
-  roof.position.set(0, 1.55, -0.22)
-  group.add(roof)
-
-  const headlampL = new THREE.Mesh(lampGeo, lightMaterial)
-  headlampL.position.set(-0.72, 0.8, 1.95)
-  const headlampR = new THREE.Mesh(lampGeo, lightMaterial)
-  headlampR.position.set(0.72, 0.8, 1.95)
-  const taillampL = new THREE.Mesh(tailGeo, new THREE.MeshStandardMaterial({ color: 0xff433d, emissive: 0xff2d2d, emissiveIntensity: 0.9 }))
-  taillampL.position.set(-0.65, 0.8, -2.02)
-  const taillampR = new THREE.Mesh(tailGeo, taillampL.material)
-  taillampR.position.set(0.65, 0.8, -2.02)
-  ;((group.userData as { materials?: THREE.Material[] }).materials as THREE.Material[]).push(taillampL.material as THREE.Material)
-  group.add(headlampL, headlampR, taillampL, taillampR)
-
-  const wheelPositions = [
-    [-0.85, 0.38, 1.35], [0.85, 0.38, 1.35],
-    [-0.85, 0.38, -1.35], [0.85, 0.38, -1.35],
-  ] as const
-  for (const [x, y, z] of wheelPositions) {
-    const wheel = new THREE.Mesh(wheelGeo, wheelMaterial)
-    wheel.rotation.z = Math.PI / 2
-    wheel.position.set(x, y, z)
-    group.add(wheel)
+function roadGeometry(sites: readonly CitySite[], width: number, lift: number): THREE.BufferGeometry {
+  const positions: number[] = []
+  roadIndices.length = 0
+  for (const site of sites) {
+    const ex = (site.columns * site.spacing) / 2
+    const ez = (site.rows * site.spacing) / 2
+    const step = 16
+    for (let c = 0; c <= site.columns; c += 1) {
+      const x = (c - site.columns / 2) * site.spacing
+      for (let z = -ez; z < ez; z += step) {
+        const end = Math.min(ez, z + step)
+        addRoadQuad(positions, site, [x, z], [x, end], width, lift)
+      }
+    }
+    for (let r = 0; r <= site.rows; r += 1) {
+      const z = (r - site.rows / 2) * site.spacing
+      for (let x = -ex; x < ex; x += step) {
+        const end = Math.min(ex, x + step)
+        addRoadQuad(positions, site, [x, z], [end, z], width, lift)
+      }
+    }
   }
-  group.rotation.order = 'YXZ'
-  return group
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geometry.setIndex(roadIndices.slice())
+  geometry.computeVertexNormals()
+  return geometry
+}
+function roadMarkingGeometry(sites: readonly CitySite[], crosswalks: boolean): THREE.BufferGeometry {
+  const positions: number[] = []
+  roadIndices.length = 0
+  for (const site of sites) {
+    const ex = (site.columns * site.spacing) / 2
+    const ez = (site.rows * site.spacing) / 2
+    const addDashes = (axis: 'x' | 'z', line: number, start: number, end: number, offset: number, width: number, dash: number, gap: number) => {
+      for (let along = start + 3; along < end - 1; along += dash + gap) {
+        const finish = Math.min(end - 1, along + dash)
+        const a: [number, number] = axis === 'z' ? [line + offset, along] : [along, line + offset]
+        const b: [number, number] = axis === 'z' ? [line + offset, finish] : [finish, line + offset]
+        addRoadQuad(positions, site, a, b, width, 0.098)
+      }
+    }
+    for (let c = 0; c <= site.columns; c += 1) {
+      const x = (c - site.columns / 2) * site.spacing
+      if (crosswalks) {
+        for (let r = 0; r <= site.rows; r += 2) {
+          const z = (r - site.rows / 2) * site.spacing
+          for (let stripe = -2.2; stripe <= 2.2; stripe += 0.72) {
+            addRoadQuad(positions, site, [x + stripe, z - 3.3], [x + stripe, z - 2.7], 0.38, 0.102)
+            addRoadQuad(positions, site, [x + stripe, z + 2.7], [x + stripe, z + 3.3], 0.38, 0.102)
+          }
+        }
+      } else {
+        addDashes('z', x, -ez, ez, -0.17, 0.1, 2.5, 5)
+        addDashes('z', x, -ez, ez, 0.17, 0.1, 2.5, 5)
+      }
+    }
+    for (let r = 0; r <= site.rows; r += 1) {
+      const z = (r - site.rows / 2) * site.spacing
+      if (!crosswalks) {
+        addDashes('x', z, -ex, ex, -0.17, 0.1, 2.5, 5)
+        addDashes('x', z, -ex, ex, 0.17, 0.1, 2.5, 5)
+      }
+    }
+  }
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geometry.setIndex(roadIndices.slice())
+  geometry.computeVertexNormals()
+  return geometry
+}
+type PerchPoint = { position: THREE.Vector3; yaw: number }
+type UtilityNetwork = { poles: PerchPoint[]; poleGeometry: THREE.BufferGeometry; wireGeometry: THREE.BufferGeometry; spanCount: number }
+
+function makeUtilityNetwork(): UtilityNetwork {
+  const poles: PerchPoint[] = []
+  const wirePieces: THREE.BufferGeometry[] = []
+  const polePieces = [
+    new THREE.CylinderGeometry(0.105, 0.18, 8.4, 7).translate(0, 4.2, 0),
+    new THREE.BoxGeometry(2.15, 0.16, 0.18).translate(0, 7.65, 0),
+    ...[-0.77, 0, 0.77].map(x => new THREE.CylinderGeometry(0.12, 0.12, 0.28, 6).translate(x, 7.88, 0)),
+  ]
+  const poleGeometry = mergeGeometries(polePieces, false)!
+  polePieces.forEach(piece => piece.dispose())
+  let spanCount = 0
+  const addRun = (site: CitySite, axis: 'x' | 'z', line: number, start: number, end: number) => {
+    const runLength = end - start
+    const step = 30
+    const count = Math.max(1, Math.ceil(runLength / step))
+    const points: [number, number][] = []
+    for (let i = 0; i <= count; i += 1) {
+      const along = start + runLength * i / count
+      const localX = axis === 'x' ? along : line
+      const localZ = axis === 'x' ? line : along
+      const [x, z] = localToWorld(site, localX, localZ)
+      const ground = surfaceAt(x, z)
+      const yaw = site.seed * 0.017 + (axis === 'x' ? Math.PI / 2 : 0)
+      poles.push({ position: new THREE.Vector3(x, ground + 8.4, z), yaw })
+      points.push([localX, localZ])
+    }
+    for (let i = 0; i < count; i += 1) {
+      const [ax, az] = points[i]
+      const [bx, bz] = points[i + 1]
+      for (const side of [-0.77, 0, 0.77]) {
+        const wirePath: THREE.Vector3[] = []
+        for (let sample = 0; sample <= 8; sample += 1) {
+          const t = sample / 8
+          const lx = axis === 'x' ? ax + (bx - ax) * t : ax + side
+          const lz = axis === 'x' ? az + side : az + (bz - az) * t
+          const [x, z] = localToWorld(site, lx, lz)
+          const sag = Math.sin(Math.PI * t) * 0.68
+          wirePath.push(new THREE.Vector3(x, surfaceAt(x, z) + 8.4 - sag, z))
+        }
+        wirePieces.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(wirePath), 8, 0.045, 4, false))
+      }
+      spanCount += 1
+    }
+  }
+  for (const site of CITY_SITES) {
+    const ex = site.columns * site.spacing / 2
+    const ez = site.rows * site.spacing / 2
+    for (let r = 0; r <= site.rows; r += 1) addRun(site, 'x', (r - site.rows / 2) * site.spacing + 10, -ex, ex)
+    for (let c = 0; c <= site.columns; c += 1) addRun(site, 'z', (c - site.columns / 2) * site.spacing + 10, -ez, ez)
+  }
+  const wireGeometry = mergeGeometries(wirePieces, false) ?? new THREE.BufferGeometry()
+  wirePieces.forEach(piece => piece.dispose())
+  return { poles, poleGeometry, wireGeometry, spanCount }
 }
 
+function makeTraffic(): TrafficVehicle[] {
+  const traffic: TrafficVehicle[] = []
+  const palette = [0xb84235, 0xe0d7bd, 0x3e5968, 0x47504c, 0xc5a34f, 0x66806f, 0x343a43, 0xc4c7c2]
+  for (const site of CITY_SITES) {
+    const ex = (site.columns * site.spacing) / 2
+    const ez = (site.rows * site.spacing) / 2
+    const add = (axis: 'x' | 'z', lineIndex: number, line: number, span: number) => {
+      const i = traffic.length
+      const direction: 1 | -1 = hash2(i, lineIndex, site.seed + 31) > 0.5 ? 1 : -1
+      traffic.push({
+        site, axis, line, direction, min: -span / 2 + 5, span: span - 10,
+        speed: 4.5 + hash2(i, lineIndex, site.seed + 32) * 4.5,
+        phase: hash2(i, lineIndex, site.seed + 33) * (span - 10),
+        scale: 0.86 + hash2(i, lineIndex, site.seed + 34) * 0.24,
+        color: palette[Math.floor(hash2(i, lineIndex, site.seed + 35) * palette.length)],
+      })
+    }
+    for (let c = 0; c <= site.columns; c += 1) add('z', c, (c - site.columns / 2) * site.spacing, ez * 2)
+    for (let r = 0; r <= site.rows; r += 1) add('x', r, (r - site.rows / 2) * site.spacing, ex * 2)
+  }
+  return traffic
+}
+
+function makeBuildings(): Building[] {
+  const buildings: Building[] = []
+  const bodyColors = [0xd0c8b7, 0xd9d3c5, 0xb9c5c3, 0xd5c0a1, 0xc5b8a6, 0xaebdc4]
+  const roofColors = [0x834c39, 0x6b4140, 0xa05e42, 0x544f4a, 0x3c5555]
+  for (const site of CITY_SITES) {
+    for (let c = 0; c < site.columns; c += 1) {
+      for (let r = 0; r < site.rows; r += 1) {
+        const h0 = hash2(c, r, site.seed)
+        if (h0 < (site.kind === 'city' ? 0.16 : 0.2)) continue
+        const lx = (c - (site.columns - 1) / 2) * site.spacing + (hash2(c, r, site.seed + 1) - 0.5) * 5
+        const lz = (r - (site.rows - 1) / 2) * site.spacing + (hash2(c, r, site.seed + 2) - 0.5) * 5
+        const [x, z] = localToWorld(site, lx, lz)
+        const ground = heightAt(x, z)
+        if (ground < 0.8) continue
+        const distance = Math.hypot(lx, lz)
+        const central = site.kind === 'city' && distance < site.radius * 0.42
+        const centerC = Math.floor(site.columns / 2)
+        const centerR = Math.floor(site.rows / 2)
+        const tower = site.kind === 'city' && (
+          (c === centerC && r === centerR) ||
+          (c === centerC - 2 && r === centerR + 1) ||
+          (c === centerC + 2 && r === centerR - 1)
+        )
+        const height = tower ? 48 + hash2(c, r, site.seed + 13) * 27 : central ? 21 + hash2(c, r, site.seed + 3) * 36 : site.kind === 'city' ? 8 + hash2(c, r, site.seed + 3) * 14 : 6 + hash2(c, r, site.seed + 3) * 11
+        const width = (site.kind === 'city' && central ? 11 : 8) + hash2(c, r, site.seed + 4) * (central ? 8 : 6)
+        const depth = (site.kind === 'city' && central ? 10 : 8) + hash2(c, r, site.seed + 5) * (central ? 7 : 6)
+        buildings.push({
+          x, z, ground, width, depth, height,
+          rotation: site.seed * 0.017 + (hash2(c, r, site.seed + 6) - 0.5) * 0.12,
+          roof: site.kind === 'town' || (!central && hash2(c, r, site.seed + 14) > 0.78),
+          color: bodyColors[Math.floor(hash2(c, r, site.seed + 7) * bodyColors.length)],
+          roofColor: roofColors[Math.floor(hash2(c, r, site.seed + 8) * roofColors.length)],
+          windowCount: Math.min(8, Math.max(1, Math.floor(height / 5))),
+        })
+      }
+    }
+  }
+  return buildings
+}
+
+function matrixAt(x: number, y: number, z: number, rotation: number, sx: number, sy: number, sz: number): THREE.Matrix4 {
+  _position.set(x, y, z)
+  _rotation.set(0, rotation, 0)
+  _quaternion.setFromEuler(_rotation)
+  _scale.set(sx, sy, sz)
+  return _matrix.compose(_position, _quaternion, _scale)
+}
+
+/** Assentamentos estáticos, compartilhados e instanciados para manter poucos draw calls. */
 export class Cities {
   readonly group = new THREE.Group()
   readonly buildingCount: number
-  readonly data: CityData
-  readonly colliders: CityColliders
-  readonly perches: readonly Perch[]
-
-  private readonly windowMaterial: THREE.MeshBasicMaterial
-  private readonly lampMaterial: THREE.MeshBasicMaterial
-  private readonly beaconMaterial: THREE.MeshBasicMaterial
-  private readonly beamMaterial: THREE.MeshBasicMaterial
-  private readonly asphaltMaterial: THREE.MeshStandardMaterial
-  private readonly sidewalkMaterial: THREE.MeshStandardMaterial
-  private readonly curbMaterial: THREE.MeshStandardMaterial
-  private readonly lineMaterial: THREE.MeshBasicMaterial
-  private readonly crosswalkMaterial: THREE.MeshBasicMaterial
-  private readonly treesMaterial: THREE.MeshStandardMaterial
-  private readonly trunksMaterial: THREE.MeshStandardMaterial
-  private readonly polesMaterial: THREE.MeshStandardMaterial
-  private readonly plazaMaterial: THREE.MeshStandardMaterial
-  private readonly fountainMaterial: THREE.MeshStandardMaterial
-  private readonly bodyMaterial: THREE.MeshStandardMaterial
-  private readonly pitchedMaterial: THREE.MeshStandardMaterial
-  private readonly flatMaterial: THREE.MeshStandardMaterial
-  private readonly spireMaterial: THREE.MeshStandardMaterial
-  private readonly antennaMaterial: THREE.MeshStandardMaterial
-  private readonly perchRingMaterial: THREE.MeshBasicMaterial
-
-  private readonly cars: Car[] = []
-  private readonly carGroups: THREE.Group[] = []
-  private readonly perchBeams: THREE.InstancedMesh
-  private readonly perchRings: THREE.InstancedMesh
-  private readonly visited = new Set<number>()
-  private readonly intersections: Intersection[]
-  private disposed = false
-
-  // Recursos próprios: materiais acima + geometrias + meshes instanciados.
-  private readonly ownedGeoms = new Set<THREE.BufferGeometry>()
-  private readonly ownedMats = new Set<THREE.Material>()
-  private readonly ownedMeshes = new Set<THREE.Mesh | THREE.InstancedMesh>()
+  readonly windowCount: number
+  readonly facadeDetailCount: number
+  readonly vehicleCount: number
+  readonly utilityPoleCount: number
+  readonly wireSpanCount: number
+  readonly perchCount: number
+  private readonly perches: PerchPoint[]
+  private readonly updateTraffic: (time: number) => void
+  private readonly detailMeshes: THREE.Object3D[]
+  private readonly trafficMeshes: THREE.Object3D[]
+  private trafficActive = true
+  private readonly windowMaterial = new THREE.MeshBasicMaterial({
+    color: 0xffd88a,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    toneMapped: false,
+  })
 
   constructor() {
     this.group.name = 'procedural-cities'
-    this.data = generateCity()
-    const data = this.data
-    this.colliders = new CityColliders(data.buildings)
-    this.perches = data.perches
-    this.buildingCount = data.buildings.length
-    this.intersections = findIntersections(data.lanes)
+    const buildings = makeBuildings()
+    this.buildingCount = buildings.length
+    const body = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.84, metalness: 0.02 }),
+      buildings.length,
+    )
+    const flatRoof = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.8 }),
+      buildings.length,
+    )
+    const pitchedRoof = new THREE.InstancedMesh(
+      new THREE.ConeGeometry(0.72, 0.58, 4),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 }),
+      buildings.length,
+    )
+    const maxWindows = buildings.reduce((n, b) => {
+      const floors = Math.min(b.windowCount, Math.floor(b.height / 4.2))
+      const columns = Math.min(3, Math.max(1, Math.floor(b.width / 4)))
+      return n + floors * (columns + (b.height > 10 ? 1 : 0))
+    }, 0)
+    const glass = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(0.62, 0.82, 0.035),
+      new THREE.MeshStandardMaterial({ color: 0x263f49, roughness: 0.24, metalness: 0.28, emissive: 0x11232b, emissiveIntensity: 0.6 }),
+      maxWindows,
+    )
+    const frames = new THREE.InstancedMesh(
+      WINDOW_FRAME,
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.62, metalness: 0.04 }),
+      maxWindows,
+    )
+    const windows = new THREE.InstancedMesh(new THREE.BoxGeometry(0.46, 0.62, 0.02), this.windowMaterial, maxWindows)
+    windows.renderOrder = 1
+    const doors = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(0.92, 2.25, 0.08),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.74 }),
+      buildings.length,
+    )
+    const signs = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1, 0.42, 0.1),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.68, metalness: 0.05 }),
+      buildings.length,
+    )
+    const cornices = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.82 }),
+      buildings.length * 8,
+    )
+    const roofUnits = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshStandardMaterial({ color: 0x78817f, roughness: 0.72, metalness: 0.14 }),
+      buildings.length * 2,
+    )
+    const pilasters = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.88 }),
+      buildings.length * 4,
+    )
+    const parapets = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.88 }),
+      buildings.length * 4,
+    )
+    const storefronts = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1, 1, 0.05),
+      new THREE.MeshStandardMaterial({ color: 0x38535a, roughness: 0.22, metalness: 0.2, emissive: 0x10191b, emissiveIntensity: 0.35 }),
+      buildings.length,
+    )
+    const awnings = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1, 0.16, 1),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.78 }),
+      buildings.length,
+    )
+    const utilities = makeUtilityNetwork()
+    this.perches = utilities.poles
+    this.utilityPoleCount = utilities.poles.length
+    this.wireSpanCount = utilities.spanCount
+    this.perchCount = utilities.poles.length
+    const utilityPoles = new THREE.InstancedMesh(utilities.poleGeometry, new THREE.MeshStandardMaterial({ color: 0x574a3b, roughness: 0.9 }), utilities.poles.length)
+    utilityPoles.name = 'utility-poles'
+    // A geometria do poste já parte do solo local (y=0) e termina em 8,4 m.
+    utilities.poles.forEach((pole, i) => utilityPoles.setMatrixAt(i, matrixAt(pole.position.x, pole.position.y - 8.4, pole.position.z, pole.yaw, 1, 1, 1)))
+    utilityPoles.instanceMatrix.needsUpdate = true
+    const utilityWires = new THREE.Mesh(utilities.wireGeometry, new THREE.MeshStandardMaterial({ color: 0x242b2c, roughness: 0.55, metalness: 0.35 }))
+    utilityWires.name = 'utility-wires'
+    utilityWires.frustumCulled = false
+    const traffic = makeTraffic()
+    this.vehicleCount = traffic.length
+    const carBody = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1.9, 0.58, 3.7),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.48, metalness: 0.16 }),
+      traffic.length,
+    )
+    const carCabin = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1.52, 0.7, 1.92),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.48, metalness: 0.12 }),
+      traffic.length,
+    )
+    const carWindows = new THREE.InstancedMesh(
+      boxAssembly([
+        { size: [0.035, 0.39, 1.3], at: [-0.77, 0, -0.08] },
+        { size: [0.035, 0.39, 1.3], at: [0.77, 0, -0.08] },
+        { size: [1.28, 0.39, 0.035], at: [0, 0, 0.89] },
+        { size: [1.24, 0.34, 0.035], at: [0, 0, -1.02] },
+      ]),
+      new THREE.MeshStandardMaterial({ color: 0x233a43, roughness: 0.2, metalness: 0.28, emissive: 0x10181a, emissiveIntensity: 0.22 }),
+      traffic.length,
+    )
+    const carWheels = new THREE.InstancedMesh(
+      new THREE.CylinderGeometry(0.32, 0.32, 0.24, 12).rotateZ(Math.PI / 2),
+      new THREE.MeshStandardMaterial({ color: 0x24282a, roughness: 0.9 }),
+      traffic.length * 4,
+    )
+    const carLights = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(0.24, 0.14, 0.07),
+      new THREE.MeshBasicMaterial({ color: 0xf8e7be, toneMapped: false }),
+      traffic.length * 2,
+    )
+    const carTailLights = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(0.23, 0.16, 0.07),
+      new THREE.MeshBasicMaterial({ color: 0xb33a31, toneMapped: false }),
+      traffic.length * 2,
+    )
+    const carGrilles = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(0.72, 0.18, 0.08),
+      new THREE.MeshStandardMaterial({ color: 0x343b3d, roughness: 0.58, metalness: 0.22 }),
+      traffic.length,
+    )
+    carBody.name = 'traffic-car-bodies'
+    carCabin.name = 'traffic-car-cabins'
+    carWindows.name = 'traffic-car-glass'
+    const balconies = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1, 0.1, 0.42),
+      new THREE.MeshStandardMaterial({ color: 0x8b8c83, roughness: 0.78 }),
+      maxWindows,
+    )
+    const balconyRails = new THREE.InstancedMesh(
+      boxAssembly([
+        { size: [0.9, 0.045, 0.045], at: [0, 0.28, 0] },
+        { size: [0.045, 0.54, 0.045], at: [-0.42, 0.02, 0] },
+        { size: [0.045, 0.54, 0.045], at: [0, 0.02, 0] },
+        { size: [0.045, 0.54, 0.045], at: [0.42, 0.02, 0] },
+      ]),
+      new THREE.MeshStandardMaterial({ color: 0x525e5f, roughness: 0.52, metalness: 0.28 }),
+      maxWindows,
+    )
+    let flatCount = 0
+    let pitchedCount = 0
+    let windowCount = 0
+    let doorCount = 0
+    let signCount = 0
+    let corniceCount = 0
+    let roofUnitCount = 0
+    let balconyCount = 0
+    let pilasterCount = 0
+    let parapetCount = 0
+    let storefrontCount = 0
+    let awningCount = 0
+    const color = new THREE.Color()
+    for (const [i, b] of buildings.entries()) {
+      const c = Math.cos(b.rotation)
+      const s = Math.sin(b.rotation)
+      const localWorld = (lx: number, lz: number): [number, number] => [
+        b.x + lx * c + lz * s,
+        b.z - lx * s + lz * c,
+      ]
+      const placeWindow = (lx: number, lz: number, y: number, rotation: number) => {
+        const [gx, gz] = localWorld(lx, lz - 0.05)
+        const [wx, wz] = localWorld(lx, lz - 0.09)
+        const [fx, fz] = localWorld(lx, lz - 0.085)
+        glass.setMatrixAt(windowCount, matrixAt(gx, y, gz, rotation, 1, 1, 1))
+        windows.setMatrixAt(windowCount, matrixAt(wx, y, wz, rotation, 1, 1, 1))
+        frames.setMatrixAt(windowCount, matrixAt(fx, y, fz, rotation, 1, 1, 1))
+        color.setHex(b.color, THREE.SRGBColorSpace).lerp(new THREE.Color(0xf3e0bd), 0.42)
+        frames.setColorAt(windowCount, color)
+        windowCount += 1
+      }
+      body.setMatrixAt(i, matrixAt(b.x, b.ground + b.height / 2, b.z, b.rotation, b.width, b.height, b.depth))
+      color.setHex(b.color, THREE.SRGBColorSpace)
+      body.setColorAt(i, color)
+      if (b.roof) {
+        pitchedRoof.setMatrixAt(pitchedCount, matrixAt(b.x, b.ground + b.height + 0.22, b.z, b.rotation + Math.PI / 4, b.width * 1.15, 0.76, b.depth * 1.15))
+        color.setHex(b.roofColor, THREE.SRGBColorSpace)
+        pitchedRoof.setColorAt(pitchedCount, color)
+        pitchedCount += 1
+      } else {
+        flatRoof.setMatrixAt(flatCount, matrixAt(b.x, b.ground + b.height + 0.16, b.z, b.rotation, b.width * 1.03, 0.32, b.depth * 1.03))
+        color.setHex(b.roofColor, THREE.SRGBColorSpace)
+        flatRoof.setColorAt(flatCount, color)
+        flatCount += 1
+      }
+      const floors = Math.min(b.windowCount, Math.floor(b.height / 4.2))
+      const frontColumns = Math.min(3, Math.max(1, Math.floor(b.width / 4)))
+      const frontZ = -b.depth / 2 - 0.045
+      for (let floor = 0; floor < floors; floor += 1) {
+        const y = b.ground + 2.4 + floor * 4.1
+        for (let slot = 0; slot < frontColumns; slot += 1) {
+          const lx = ((slot + 1) / (frontColumns + 1) - 0.5) * b.width
+          placeWindow(lx, frontZ, y, b.rotation)
+          if (b.height > 18 && b.height < 42 && floor > 0 && hash2(i, floor * 7 + slot, 105) > 0.62) {
+            const [bx, bz] = localWorld(lx, frontZ - 0.22)
+            const balconyY = y - 0.49
+            balconies.setMatrixAt(balconyCount, matrixAt(bx, balconyY, bz, b.rotation, 0.82, 0.82, 1))
+            const [rx, rz] = localWorld(lx, frontZ - 0.39)
+            balconyRails.setMatrixAt(balconyCount, matrixAt(rx, balconyY + 0.05, rz, b.rotation, 0.82, 0.82, 1))
+            balconyCount += 1
+          }
+        }
+        if (b.height > 10) {
+          placeWindow(b.width / 2 + 0.045, 0, y, b.rotation + Math.PI / 2)
+        }
+      }
 
-    this.windowMaterial = new THREE.MeshBasicMaterial({ color: 0xffd88a, transparent: true, opacity: 0, depthWrite: false, toneMapped: false })
-    this.lampMaterial = new THREE.MeshBasicMaterial({ color: 0xfff0b8, transparent: true, opacity: 0, depthWrite: false, toneMapped: false })
-    this.beaconMaterial = new THREE.MeshBasicMaterial({ color: 0xff3b30, transparent: true, opacity: 0, depthWrite: false, toneMapped: false })
-    this.beamMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.2, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending })
-    this.asphaltMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0.02 })
-    this.sidewalkMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 })
-    this.curbMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 })
-    this.lineMaterial = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: true, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 })
-    this.crosswalkMaterial = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: true, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })
-    this.treesMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92, flatShading: true })
-    this.trunksMaterial = new THREE.MeshStandardMaterial({ color: 0x5a4331, roughness: 1 })
-    this.polesMaterial = new THREE.MeshStandardMaterial({ color: 0x3a3f45, roughness: 0.7 })
-    this.plazaMaterial = new THREE.MeshStandardMaterial({ color: 0x5f9a4c, roughness: 1 })
-    this.fountainMaterial = new THREE.MeshStandardMaterial({ color: 0x8fb8d8, roughness: 0.25, metalness: 0.1 })
-    this.bodyMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.84, metalness: 0.02 })
-    this.pitchedMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 })
-    this.flatMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.8 })
-    this.spireMaterial = new THREE.MeshStandardMaterial({ color: 0x6f3a30, roughness: 0.85 })
-    this.antennaMaterial = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, roughness: 0.6, metalness: 0.4 })
-    this.perchRingMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, depthWrite: false, side: THREE.DoubleSide })
+      // Uma entrada visível ajuda a dar escala às construções vistas em rasante.
+      const [doorX, doorZ] = localWorld(0, frontZ - 0.035)
+      doors.setMatrixAt(doorCount, matrixAt(doorX, b.ground + 1.13, doorZ, b.rotation, 1, 1, 1))
+      color.setHex([0x49362e, 0x35454a, 0x624333][Math.floor(hash2(i, 3, 106) * 3)], THREE.SRGBColorSpace)
+      doors.setColorAt(doorCount++, color)
 
-    for (const m of [
-      this.windowMaterial, this.lampMaterial, this.beaconMaterial, this.beamMaterial,
-      this.asphaltMaterial, this.sidewalkMaterial, this.curbMaterial, this.lineMaterial,
-      this.crosswalkMaterial, this.treesMaterial, this.trunksMaterial, this.polesMaterial,
-      this.plazaMaterial, this.fountainMaterial, this.bodyMaterial, this.pitchedMaterial,
-      this.flatMaterial, this.spireMaterial, this.antennaMaterial, this.perchRingMaterial,
-    ]) this.ownedMats.add(m)
+      if (b.height < 16 && hash2(i, 11, 109) > 0.28) {
+        const shopWidth = Math.min(7.2, b.width * 0.72)
+        const [sx, sz] = localWorld(0, frontZ - 0.01)
+        storefronts.setMatrixAt(storefrontCount, matrixAt(sx, b.ground + 1.32, sz, b.rotation, shopWidth, 1.6, 1))
+        color.setHex([0x38535a, 0x493a32, 0x52634e][Math.floor(hash2(i, 12, 109) * 3)], THREE.SRGBColorSpace)
+        storefronts.setColorAt(storefrontCount++, color)
+        const [ax, az] = localWorld(0, frontZ - 0.55)
+        awnings.setMatrixAt(awningCount, matrixAt(ax, b.ground + 3.05, az, b.rotation, shopWidth, 1, 1))
+        color.setHex([0x8a5140, 0x64704f, 0xb19a72, 0x566b78][Math.floor(hash2(i, 13, 109) * 4)], THREE.SRGBColorSpace)
+        awnings.setColorAt(awningCount++, color)
+      }
 
-    this.buildBuildings()
-    this.buildProps()
-    this.buildRoads()
-    this.buildCars()
-    this.buildPerches()
-    this.buildPlazas()
+      // Letreiros em parte dos prédios baixos quebram a repetição do bloco residencial.
+      if (b.height < 17 && hash2(i, 5, 107) > 0.52) {
+        const [signX, signZ] = localWorld(0, frontZ - 0.09)
+        signs.setMatrixAt(signCount, matrixAt(signX, b.ground + 3.25, signZ, b.rotation, Math.min(9, b.width * 0.72), 1, 1))
+        color.setHex([0x315e68, 0x8c503e, 0x596344, 0x594b68][Math.floor(hash2(i, 9, 108) * 4)], THREE.SRGBColorSpace)
+        signs.setColorAt(signCount++, color)
+      }
 
+      // Cornijas discretas marcam os andares; unidades de ventilação pontuam os terraços altos.
+      for (let y = 10; y < b.height - 3 && corniceCount < buildings.length * 8; y += 9) {
+        cornices.setMatrixAt(corniceCount, matrixAt(b.x, b.ground + y, b.z, b.rotation, b.width + 0.34, 0.15, b.depth + 0.34))
+        color.setHex(b.roofColor, THREE.SRGBColorSpace).lerp(new THREE.Color(0xe5d6bc), 0.25)
+        cornices.setColorAt(corniceCount++, color)
+      }
+      if (b.height > 20 && !b.roof) {
+        for (const lx of [-1, 1]) for (const lz of [-1, 1]) {
+          const [px, pz] = localWorld(lx * (b.width / 2 + 0.04), lz * (b.depth / 2 + 0.04))
+          pilasters.setMatrixAt(pilasterCount, matrixAt(px, b.ground + b.height / 2, pz, b.rotation, 0.24, b.height * 0.98, 0.24))
+          color.setHex(b.color, THREE.SRGBColorSpace).lerp(new THREE.Color(0xf4eddb), 0.36)
+          pilasters.setColorAt(pilasterCount++, color)
+        }
+      }
+      if (!b.roof && b.height > 12) {
+        const py = b.ground + b.height + 0.47
+        for (const side of [-1, 1]) {
+          const [fx, fz] = localWorld(0, side * (b.depth / 2 + 0.02))
+          const [sx, sz] = localWorld(side * (b.width / 2 + 0.02), 0)
+          parapets.setMatrixAt(parapetCount, matrixAt(fx, py, fz, b.rotation, b.width + 0.08, 0.72, 0.18))
+          color.setHex(b.roofColor, THREE.SRGBColorSpace).lerp(new THREE.Color(0xf0e7d6), 0.24)
+          parapets.setColorAt(parapetCount++, color)
+          parapets.setMatrixAt(parapetCount, matrixAt(sx, py, sz, b.rotation, 0.18, 0.72, b.depth + 0.08))
+          parapets.setColorAt(parapetCount++, color)
+        }
+      }
+      if (!b.roof && b.height > 25) {
+        for (const side of [-1, 1]) {
+          const lx = side * Math.min(2.4, b.width * 0.23)
+          const lz = b.depth * 0.14
+          const rx = b.x + lx * c + lz * s
+          const rz = b.z - lx * s + lz * c
+          roofUnits.setMatrixAt(roofUnitCount++, matrixAt(rx, b.ground + b.height + 0.66, rz, b.rotation, 1.8, 1.1, 1.35))
+        }
+      }
+    }
+    body.instanceMatrix.needsUpdate = true
+    flatRoof.count = flatCount
+    flatRoof.instanceMatrix.needsUpdate = true
+    pitchedRoof.count = pitchedCount
+    pitchedRoof.instanceMatrix.needsUpdate = true
+    glass.count = windowCount
+    glass.instanceMatrix.needsUpdate = true
+    frames.count = windowCount
+    frames.instanceMatrix.needsUpdate = true
+    if (frames.instanceColor) frames.instanceColor.needsUpdate = true
+    windows.count = windowCount
+    windows.instanceMatrix.needsUpdate = true
+    doors.count = doorCount
+    doors.instanceMatrix.needsUpdate = true
+    if (doors.instanceColor) doors.instanceColor.needsUpdate = true
+    signs.count = signCount
+    signs.instanceMatrix.needsUpdate = true
+    if (signs.instanceColor) signs.instanceColor.needsUpdate = true
+    cornices.count = corniceCount
+    cornices.instanceMatrix.needsUpdate = true
+    if (cornices.instanceColor) cornices.instanceColor.needsUpdate = true
+    roofUnits.count = roofUnitCount
+    roofUnits.instanceMatrix.needsUpdate = true
+    this.windowCount = windowCount
+    this.facadeDetailCount = windowCount * 3 + doorCount + signCount + corniceCount + roofUnitCount + balconyCount * 2 + pilasterCount + parapetCount + storefrontCount + awningCount
+
+    traffic.forEach((vehicle, i) => {
+      color.setHex(vehicle.color, THREE.SRGBColorSpace)
+      carBody.setColorAt(i, color)
+      color.lerp(new THREE.Color(0xe7dec9), 0.16)
+      carCabin.setColorAt(i, color)
+    })
+    carBody.instanceColor!.needsUpdate = true
+    carCabin.instanceColor!.needsUpdate = true
+    this.updateTraffic = (time: number) => {
+      for (let i = 0; i < traffic.length; i += 1) {
+        const vehicle = traffic[i]
+        const progress = ((vehicle.phase + time * vehicle.speed) % vehicle.span + vehicle.span) % vehicle.span
+        const along = vehicle.min + progress
+        const localX = vehicle.axis === 'z' ? vehicle.line + vehicle.direction * 1.45 : along
+        const localZ = vehicle.axis === 'z' ? along : vehicle.line - vehicle.direction * 1.45
+        const [x, z] = localToWorld(vehicle.site, localX, localZ)
+        const siteRotation = vehicle.site.seed * 0.017
+        const rotation = siteRotation + (vehicle.axis === 'x' ? Math.PI / 2 : 0) + (vehicle.direction < 0 ? Math.PI : 0)
+        const scale = vehicle.scale
+        const roadY = surfaceAt(x, z) + 0.09
+        carBody.setMatrixAt(i, matrixAt(x, roadY + 0.52 * scale, z, rotation, scale, scale, scale))
+        carCabin.setMatrixAt(i, matrixAt(x, roadY + 0.91 * scale, z - 0.08 * scale, rotation, scale, scale, scale))
+        carWindows.setMatrixAt(i, matrixAt(x, roadY + 0.94 * scale, z - 0.08 * scale, rotation, scale, scale, scale))
+        let wheel = i * 4
+        for (const wx of [-0.84, 0.84]) for (const wz of [-1.12, 1.12]) {
+          const px = x + (wx * Math.cos(rotation) + wz * Math.sin(rotation)) * scale
+          const pz = z + (-wx * Math.sin(rotation) + wz * Math.cos(rotation)) * scale
+          carWheels.setMatrixAt(wheel++, matrixAt(px, roadY + 0.32 * scale, pz, rotation, scale, scale, scale))
+        }
+        for (let side = 0; side < 2; side += 1) {
+          const lx = side === 0 ? -0.58 : 0.58
+          const px = x + (lx * Math.cos(rotation) + 1.84 * Math.sin(rotation)) * scale
+          const pz = z + (-lx * Math.sin(rotation) + 1.84 * Math.cos(rotation)) * scale
+          carLights.setMatrixAt(i * 2 + side, matrixAt(px, roadY + 0.53 * scale, pz, rotation, scale, scale, scale))
+          const tx = x + (lx * Math.cos(rotation) - 1.84 * Math.sin(rotation)) * scale
+          const tz = z + (-lx * Math.sin(rotation) - 1.84 * Math.cos(rotation)) * scale
+          carTailLights.setMatrixAt(i * 2 + side, matrixAt(tx, roadY + 0.53 * scale, tz, rotation, scale, scale, scale))
+        }
+        const gx = x + 1.88 * Math.sin(rotation) * scale
+        const gz = z + 1.88 * Math.cos(rotation) * scale
+        carGrilles.setMatrixAt(i, matrixAt(gx, roadY + 0.48 * scale, gz, rotation, scale, scale, scale))
+      }
+      carBody.instanceMatrix.needsUpdate = true
+      carCabin.instanceMatrix.needsUpdate = true
+      carWindows.instanceMatrix.needsUpdate = true
+      carWheels.instanceMatrix.needsUpdate = true
+      carLights.instanceMatrix.needsUpdate = true
+      carTailLights.instanceMatrix.needsUpdate = true
+      carGrilles.instanceMatrix.needsUpdate = true
+    }
+    this.updateTraffic(0)
+    for (const mesh of [pilasters, parapets, storefronts, awnings]) mesh.instanceMatrix.needsUpdate = true
+    for (const mesh of [pilasters, parapets, storefronts, awnings]) if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
+    pilasters.count = pilasterCount
+    parapets.count = parapetCount
+    storefronts.count = storefrontCount
+    awnings.count = awningCount
+    balconies.count = balconyCount
+    balconyRails.count = balconyCount
+    balconies.instanceMatrix.needsUpdate = true
+    balconyRails.instanceMatrix.needsUpdate = true
+    for (const mesh of [carBody, carCabin, carWindows, carWheels, carLights, carTailLights, carGrilles]) {
+      mesh.castShadow = false
+      mesh.receiveShadow = true
+    }
+    const laneMarkings = new THREE.Mesh(roadMarkingGeometry(CITY_SITES, false), new THREE.MeshStandardMaterial({ color: 0xd3bd76, roughness: 0.95 }))
+    const crosswalkMarkings = new THREE.Mesh(roadMarkingGeometry(CITY_SITES, true), new THREE.MeshStandardMaterial({ color: 0xe0dfd4, roughness: 0.94 }))
+    const sidewalks = new THREE.Mesh(roadGeometry(CITY_SITES, 14, 0.025), new THREE.MeshStandardMaterial({ color: 0xb7b2a5, roughness: 1 }))
+    const roadShoulders = new THREE.Mesh(roadGeometry(CITY_SITES, 9, 0.045), new THREE.MeshStandardMaterial({ color: 0x686d69, roughness: 1 }))
+    const asphalt = new THREE.Mesh(roadGeometry(CITY_SITES, 6.2, 0.075), new THREE.MeshStandardMaterial({ color: 0x30383d, roughness: 1 }))
+    laneMarkings.name = 'road-lane-markings'
+    crosswalkMarkings.name = 'road-crosswalk-markings'
+    sidewalks.name = 'road-sidewalks'
+    roadShoulders.name = 'road-shoulders'
+    asphalt.name = 'road-asphalt'
+    this.group.add(
+      sidewalks,
+      roadShoulders,
+      asphalt,
+      laneMarkings,
+      crosswalkMarkings,
+      body,
+      flatRoof,
+      pitchedRoof,
+      glass,
+      frames,
+      windows,
+      doors,
+      signs,
+      cornices,
+      roofUnits,
+      balconies,
+      balconyRails,
+      pilasters,
+      parapets,
+      storefronts,
+      awnings,
+      carBody,
+      carCabin,
+      carWindows,
+      carWheels,
+      carLights,
+      carTailLights,
+      carGrilles,
+      utilityPoles,
+      utilityWires,
+    )
+    this.detailMeshes = [laneMarkings, crosswalkMarkings, utilityPoles, utilityWires, glass, frames, windows, doors, signs, cornices, roofUnits, balconies, balconyRails, pilasters, parapets, storefronts, awnings]
+    this.trafficMeshes = [carBody, carCabin, carWindows, carWheels, carLights, carTailLights, carGrilles]
+    this.detailMeshes.forEach(mesh => { mesh.visible = false })
+    this.trafficMeshes.forEach(mesh => { mesh.visible = false })
+    this.trafficActive = false
     this.group.traverse(object => {
       const mesh = object as THREE.Mesh
       if (mesh.isMesh) {
@@ -485,493 +722,34 @@ export class Cities {
         mesh.receiveShadow = true
       }
     })
-    this.perchBeams.receiveShadow = false
-    this.perchRings.receiveShadow = false
   }
 
-  dispose(): void {
-    if (this.disposed) return
-    this.disposed = true
-    // Carros: geometrias e materiais são únicos por carro.
-    for (const car of this.carGroups) {
-      const ud = car.userData as { materials?: THREE.Material[]; geometries?: THREE.BufferGeometry[] }
-      for (const g of ud.geometries ?? []) g.dispose()
-      for (const m of ud.materials ?? []) m.dispose()
+  nearestPerch(position: THREE.Vector3, maxDistance: number): { position: THREE.Vector3; yaw: number; distance: number } | null {
+    if (!Number.isFinite(maxDistance) || maxDistance < 0) return null
+    let nearest: PerchPoint | null = null
+    let nearestDistance = maxDistance
+    for (const perch of this.perches) {
+      const distance = position.distanceTo(perch.position)
+      if (distance <= nearestDistance) { nearest = perch; nearestDistance = distance }
     }
-    this.carGroups.length = 0
-    this.cars.length = 0
-    // Instanciados
-    this.perchBeams.dispose()
-    this.perchRings.dispose()
-    // Recursos próprios
-    for (const m of this.ownedMeshes) m.dispose?.()
-    for (const g of this.ownedGeoms) g.dispose()
-    for (const m of this.ownedMats) m.dispose()
-    this.ownedMeshes.clear()
-    this.ownedGeoms.clear()
-    this.ownedMats.clear()
-    this.group.clear()
+    return nearest ? { position: nearest.position.clone(), yaw: nearest.yaw, distance: nearestDistance } : null
   }
 
-  private trackGeo<T extends THREE.BufferGeometry>(g: T): T {
-    this.ownedGeoms.add(g)
-    return g
-  }
-
-  private trackMesh<T extends THREE.Mesh | THREE.InstancedMesh>(m: T): T {
-    this.ownedMeshes.add(m)
-    this.group.add(m)
-    return m
-  }
-
-  private buildBuildings(): void {
-    const data = this.data
-    const color = new THREE.Color()
-    type Volume = { x: number; z: number; y0: number; w: number; d: number; h: number; rot: number; color: number }
-    const volumes: Volume[] = []
-    for (const b of data.buildings) {
-      volumes.push({ x: b.x, z: b.z, y0: b.ground, w: b.width, d: b.depth, h: b.height, rot: b.rotation, color: b.color })
-      if (b.upper) {
-        const u = b.upper
-        const c = Math.cos(b.rotation)
-        const s = Math.sin(b.rotation)
-        volumes.push({
-          x: b.x + u.ox * c + u.oz * s,
-          z: b.z - u.ox * s + u.oz * c,
-          y0: u.fromGround ? b.ground : b.ground + b.height,
-          w: u.width, d: u.depth, h: u.height, rot: b.rotation,
-          color: u.spire ? b.color : new THREE.Color(b.color).multiplyScalar(0.92).getHex(),
-        })
-      }
+  update(daylight: number, time = 0, camera?: THREE.Vector3): void {
+    this.windowMaterial.opacity = THREE.MathUtils.clamp((1 - daylight) * 1.1, 0, 0.95)
+    if (!camera) {
+      this.detailMeshes.forEach(mesh => { mesh.visible = true })
+      this.trafficMeshes.forEach(mesh => { mesh.visible = true })
+      this.trafficActive = true
+      this.updateTraffic(time)
+      return
     }
-
-    const boxGeo = this.trackGeo(new THREE.BoxGeometry(1, 1, 1))
-    const body = new THREE.InstancedMesh(boxGeo, this.bodyMaterial, volumes.length)
-    for (const [i, v] of volumes.entries()) {
-      body.setMatrixAt(i, composeMatrix(v.x, v.y0 + v.h / 2, v.z, v.rot, v.w, v.h, v.d))
-      body.setColorAt(i, color.setHex(v.color, THREE.SRGBColorSpace))
+    const nearby = CITY_SITES.some(site => Math.hypot(camera.x - site.x, camera.z - site.z) < 380)
+    if (nearby !== this.trafficActive) {
+      this.detailMeshes.forEach(mesh => { mesh.visible = nearby })
+      this.trafficMeshes.forEach(mesh => { mesh.visible = nearby })
+      this.trafficActive = nearby
     }
-    body.instanceMatrix.needsUpdate = true
-    this.trackMesh(body)
-
-    const pitchedCount = data.buildings.filter(b => b.pitched).length
-    const flatCount = data.buildings.length - pitchedCount
-    const pitchedGeo = this.trackGeo(new THREE.ConeGeometry(0.7071, 1, 4))
-    const pitched = new THREE.InstancedMesh(pitchedGeo, this.pitchedMaterial, Math.max(1, pitchedCount))
-    const flat = new THREE.InstancedMesh(boxGeo, this.flatMaterial, Math.max(1, flatCount))
-    let pi = 0, fi = 0, ai = 0
-    const spires = data.buildings.filter(b => b.upper?.spire)
-    const antennas = data.buildings.filter(b => b.antenna > 0)
-    const spireGeo = this.trackGeo(new THREE.ConeGeometry(0.7071, 1, 4))
-    const spireMesh = new THREE.InstancedMesh(spireGeo, this.spireMaterial, Math.max(1, spires.length))
-    const antennaMesh = new THREE.InstancedMesh(boxGeo, this.antennaMaterial, Math.max(1, antennas.length))
-    const beaconGeo = this.trackGeo(new THREE.SphereGeometry(0.55, 8, 6))
-    const beaconMesh = new THREE.InstancedMesh(beaconGeo, this.beaconMaterial, Math.max(1, antennas.length))
-
-    for (const b of data.buildings) {
-      if (b.pitched) {
-        pitched.setMatrixAt(pi, composeMatrix(b.x, b.ground + b.height + b.roofHeight / 2, b.z, b.rotation + Math.PI / 4, b.width * 1.12, b.roofHeight, b.depth * 1.12))
-        pitched.setColorAt(pi, color.setHex(b.roofColor, THREE.SRGBColorSpace))
-        pi += 1
-      } else {
-        flat.setMatrixAt(fi, composeMatrix(b.x, b.ground + b.height + 0.2, b.z, b.rotation, b.width * 1.04, 0.4, b.depth * 1.04))
-        flat.setColorAt(fi, color.setHex(b.roofColor, THREE.SRGBColorSpace))
-        fi += 1
-      }
-    }
-    pitched.count = pi
-    flat.count = fi
-
-    for (const [i, b] of spires.entries()) {
-      const u = b.upper!
-      const c = Math.cos(b.rotation)
-      const s = Math.sin(b.rotation)
-      spireMesh.setMatrixAt(i, composeMatrix(b.x + u.ox * c + u.oz * s, b.ground + u.height + 2, b.z - u.ox * s + u.oz * c, b.rotation + Math.PI / 4, u.width * 1.15, 4, u.depth * 1.15))
-    }
-    for (const b of antennas) {
-      const u = b.upper
-      const top = u && !u.fromGround ? b.ground + b.height + u.height : b.ground + b.height
-      antennaMesh.setMatrixAt(ai, composeMatrix(b.x, top + b.antenna / 2, b.z, b.rotation, 0.5, b.antenna, 0.5))
-      beaconMesh.setMatrixAt(ai, composeMatrix(b.x, top + b.antenna + 0.4, b.z, 0, 1, 1, 1))
-      ai += 1
-    }
-    antennaMesh.count = ai
-    beaconMesh.count = ai
-    spireMesh.count = spires.length
-
-<<<<<<< HEAD
-    // Janelas nas quatro fachadas.
-    const slots = volumes.reduce((acc, v) => {
-      if (v.h < 4.5) return acc;
-      const floors = Math.min(14, Math.floor(v.h / 4.2));
-      const columns = Math.min(4, Math.max(1, Math.floor(v.w / 4)));
-      return acc + floors * (columns * 2 + 2);
-    }, 0);
-    const winGeo = this.trackGeo(new THREE.BoxGeometry(0.62, 0.82, 0.045));
-    const windows = new THREE.InstancedMesh(winGeo, this.windowMaterial, Math.max(1, slots));
-    windows.renderOrder = 1;
-    let wi = 0;
-
-    // Frisos entre andares e pilastras para quebrar as fachadas lisas.
-    const bandCapacity = volumes.reduce((sum, v) =>
-      sum + (v.h >= 8 ? Math.max(0, Math.min(14, Math.floor(v.h / 4.2)) - 1) * 4 : 0), 0);
-    const detailGeo = this.trackGeo(new THREE.BoxGeometry(1, 1, 1));
-    const bands = new THREE.InstancedMesh(detailGeo, this.flatMaterial, Math.max(1, bandCapacity));
-    let bi = 0;
-    const pilasterCapacity = volumes.reduce((sum, v) =>
-      sum + (v.h >= 8 ? Math.min(5, Math.max(2, Math.floor(v.w / 5))) * 2 : 0), 0);
-    const pilasters = new THREE.InstancedMesh(detailGeo, this.bodyMaterial, Math.max(1, pilasterCapacity));
-    let pi = 0;
-
-    for (const v of volumes) {
-      if (v.h < 4.5) continue;
-      const c = Math.cos(v.rot), s = Math.sin(v.rot);
-      const floors = Math.min(14, Math.floor(v.h / 4.2));
-      const columns = Math.min(4, Math.max(1, Math.floor(v.w / 4)));
-      for (let floor = 0; floor < floors; floor += 1) {
-        const y = v.y0 + 2.4 + floor * 4.1;
-        for (let slot = 0; slot < columns; slot += 1) {
-          const lx = ((slot + 1) / (columns + 1) - 0.5) * v.w;
-          const frontZ = -v.d / 2 - 0.04;
-          const backZ = v.d / 2 + 0.04;
-          windows.setMatrixAt(wi++, composeMatrix(v.x + lx * c + frontZ * s, y, v.z - lx * s + frontZ * c, v.rot));
-          windows.setMatrixAt(wi++, composeMatrix(v.x + lx * c + backZ * s, y, v.z - lx * s + backZ * c, v.rot + Math.PI));
-        }
-        const sideX = v.w / 2 + 0.04;
-        const otherX = -v.w / 2 - 0.04;
-        windows.setMatrixAt(wi++, composeMatrix(v.x + sideX * c, y, v.z - sideX * s, v.rot + Math.PI / 2));
-        windows.setMatrixAt(wi++, composeMatrix(v.x + otherX * c, y, v.z - otherX * s, v.rot - Math.PI / 2));
-      }
-      if (v.h < 8) continue;
-      // Frisos discretos contornando o edifício em cada nível.
-      for (let floor = 1; floor < floors; floor += 1) {
-        const y = v.y0 + floor * 4.1;
-        const frontZ = -v.d / 2 - 0.025, backZ = v.d / 2 + 0.025;
-        bands.setMatrixAt(bi++, composeMatrix(v.x, y, v.z + frontZ * c, v.rot, v.w + 0.12, 0.12, 0.1));
-        bands.setMatrixAt(bi++, composeMatrix(v.x, y, v.z + backZ * c, v.rot, v.w + 0.12, 0.12, 0.1));
-        const sideX = v.w / 2 + 0.025, otherSideX = -v.w / 2 - 0.025;
-        bands.setMatrixAt(bi++, composeMatrix(v.x + sideX * c, y, v.z - sideX * s, v.rot, 0.1, 0.12, v.d + 0.12));
-        bands.setMatrixAt(bi++, composeMatrix(v.x + otherSideX * c, y, v.z - otherSideX * s, v.rot, 0.1, 0.12, v.d + 0.12));
-      }
-      // Pilastras verticais na frente e nos fundos.
-      const count = Math.min(5, Math.max(2, Math.floor(v.w / 5)));
-      for (let col = 0; col < count; col += 1) {
-        const lx = ((col + 0.5) / count - 0.5) * v.w;
-        const frontZ = -v.d / 2 - 0.035, backZ = v.d / 2 + 0.035;
-        pilasters.setMatrixAt(pi++, composeMatrix(v.x + lx * c + frontZ * s, v.y0 + v.h / 2, v.z - lx * s + frontZ * c, v.rot, 0.1, v.h, 0.08));
-        pilasters.setMatrixAt(pi++, composeMatrix(v.x + lx * c + backZ * s, v.y0 + v.h / 2, v.z - lx * s + backZ * c, v.rot, 0.1, v.h, 0.08));
-      }
-    }
-    windows.count = wi;
-    bands.count = bi;
-    pilasters.count = pi;
-    this.trackMesh(pitched);
-    this.trackMesh(flat);
-    this.trackMesh(spireMesh);
-    this.trackMesh(antennaMesh);
-    this.trackMesh(beaconMesh);
-    this.trackMesh(windows);
-    this.trackMesh(bands);
-    this.trackMesh(pilasters)
-=======
-    const slots = volumes.reduce((acc, v) => acc + (v.h < 4.5 ? 0 : Math.min(14, Math.floor(v.h / 4.2)) * (Math.min(4, Math.max(1, Math.floor(v.w / 4))) + 1)), 0)
-    const winGeo = this.trackGeo(new THREE.BoxGeometry(0.62, 0.82, 0.045))
-    const windows = new THREE.InstancedMesh(winGeo, this.windowMaterial, Math.max(1, slots))
-    windows.renderOrder = 1
-    let wi = 0
-    for (const v of volumes) {
-      if (v.h < 4.5) continue
-      const c = Math.cos(v.rot), s = Math.sin(v.rot)
-      const floors = Math.min(14, Math.floor(v.h / 4.2))
-      const columns = Math.min(4, Math.max(1, Math.floor(v.w / 4)))
-      for (let floor = 0; floor < floors; floor += 1) {
-        const y = v.y0 + 2.4 + floor * 4.1
-        for (let slot = 0; slot < columns; slot += 1) {
-          const lx = ((slot + 1) / (columns + 1) - 0.5) * v.w
-          const frontZ = -v.d / 2 - 0.04
-          windows.setMatrixAt(wi++, composeMatrix(v.x + lx * c + frontZ * s, y, v.z - lx * s + frontZ * c, v.rot))
-        }
-        windows.setMatrixAt(wi++, composeMatrix(v.x + (v.w / 2 + 0.04) * c, y, v.z - (v.w / 2 + 0.04) * s, v.rot + Math.PI / 2))
-      }
-    }
-    windows.count = wi
-    this.trackMesh(pitched)
-    this.trackMesh(flat)
-    this.trackMesh(spireMesh)
-    this.trackMesh(antennaMesh)
-    this.trackMesh(beaconMesh)
-    this.trackMesh(windows)
->>>>>>> 795b639e012abf732208c865466f8376e73b67ad
-  }
-
-  private buildProps(): void {
-    const data = this.data
-    const color = new THREE.Color()
-    const trees = data.trees
-    const crownGeo = this.trackGeo(new THREE.IcosahedronGeometry(1, 1))
-    const crowns = new THREE.InstancedMesh(crownGeo, this.treesMaterial, Math.max(1, trees.length))
-    const trunkGeo = this.trackGeo(new THREE.CylinderGeometry(0.14, 0.2, 1, 6))
-    const trunks = new THREE.InstancedMesh(trunkGeo, this.trunksMaterial, Math.max(1, trees.length))
-    for (const [i, t] of trees.entries()) {
-      const h = 2.2 * t.scale
-      trunks.setMatrixAt(i, composeMatrix(t.x, t.ground + h / 2, t.z, 0, t.scale, h, t.scale))
-      crowns.setMatrixAt(i, composeMatrix(t.x, t.ground + h + 1.2 * t.scale, t.z, t.tone * 6, 1.7 * t.scale, 1.5 * t.scale, 1.7 * t.scale))
-      crowns.setColorAt(i, color.setHex(TREE_TONES[Math.floor(t.tone * TREE_TONES.length) % TREE_TONES.length], THREE.SRGBColorSpace))
-    }
-    if (!trees.length) { crowns.count = 0; trunks.count = 0 }
-
-    const lamps = data.lamps
-    const poleGeo = this.trackGeo(new THREE.CylinderGeometry(0.07, 0.09, 1, 5))
-    const poles = new THREE.InstancedMesh(poleGeo, this.polesMaterial, Math.max(1, lamps.length))
-    const bulbGeo = this.trackGeo(new THREE.SphereGeometry(0.36, 8, 6))
-    const bulbs = new THREE.InstancedMesh(bulbGeo, this.lampMaterial, Math.max(1, lamps.length))
-    for (const [i, l] of lamps.entries()) {
-      poles.setMatrixAt(i, composeMatrix(l.x, l.ground + 2.6, l.z, 0, 1, 5.2, 1))
-      bulbs.setMatrixAt(i, composeMatrix(l.x, l.ground + 5.3, l.z, 0, 1, 1, 1))
-    }
-    if (!lamps.length) { poles.count = 0; bulbs.count = 0 }
-
-    this.trackMesh(crowns)
-    this.trackMesh(trunks)
-    this.trackMesh(poles)
-    this.trackMesh(bulbs)
-  }
-
-  private buildRoads(): void {
-    const data = this.data
-    const buf = newBuffers()
-
-    const asphaltColors: THREE.Color[] = [
-      new THREE.Color(ASPHALT_DARK),
-      new THREE.Color(ASPHALT_MID),
-      new THREE.Color(ASPHALT_LIGHT),
-    ]
-    const sidewalkColor = new THREE.Color(SIDEWALK_COLOR)
-    const curbColor = new THREE.Color(CURB_COLOR)
-    const yellowLine = new THREE.Color(LINE_YELLOW)
-    const whiteLine = new THREE.Color(LINE_WHITE)
-    const intersectionColor = new THREE.Color(ASPHALT_MID)
-
-    for (const lane of data.lanes) {
-      const spec = ROAD_SPEC[lane.tier]
-      const a: [number, number] = [lane.ax, lane.az]
-      const b: [number, number] = [lane.bx, lane.bz]
-      const asphaltCol = asphaltColors[lane.tier]
-      pushRibbon(buf.asphalt, a, b, spec.asphalt, 0.02, 0, asphaltCol, LANE_STEP)
-      if (spec.centerLine === 'double-yellow') pushDoubleYellow(buf.lines, a, b, 0.045, yellowLine)
-      else if (spec.centerLine === 'dashed-white') pushDashedWhite(buf.lines, a, b, 0.045, whiteLine)
-      if (spec.edgeLines) pushEdgeLines(buf.lines, a, b, spec.asphalt / 2, 0.04, whiteLine)
-      if (spec.sidewalk > 0) pushSidewalk(buf.sidewalk, buf.curb, a, b, spec.asphalt / 2, spec.sidewalk, spec.curbHeight, sidewalkColor, curbColor)
-    }
-
-    for (const it of this.intersections) {
-      pushIntersectionSquare(buf.intersection, it.x, it.z, it.size, 0.04, intersectionColor)
-      if (it.tier <= 1) {
-        const roadW = ROAD_SPEC[it.tier].asphalt
-        pushCrosswalk(buf.crosswalk, it.x, it.z, it.size, roadW, 'north', 0.06, whiteLine)
-        pushCrosswalk(buf.crosswalk, it.x, it.z, it.size, roadW, 'south', 0.06, whiteLine)
-        pushCrosswalk(buf.crosswalk, it.x, it.z, it.size, roadW, 'east', 0.06, whiteLine)
-        pushCrosswalk(buf.crosswalk, it.x, it.z, it.size, roadW, 'west', 0.06, whiteLine)
-      }
-    }
-
-    const asphaltGeo = this.trackGeo(layerToGeometry(buf.asphalt))
-    const sidewalkGeo = this.trackGeo(layerToGeometry(buf.sidewalk))
-    const curbGeo = this.trackGeo(layerToGeometry(buf.curb))
-    const linesGeo = this.trackGeo(layerToGeometry(buf.lines))
-    const intersectionGeo = this.trackGeo(layerToGeometry(buf.intersection))
-    const crosswalkGeo = this.trackGeo(layerToGeometry(buf.crosswalk))
-
-    const asphaltMesh = new THREE.Mesh(asphaltGeo, this.asphaltMaterial)
-<<<<<<< HEAD
-    asphaltMesh.name = 'city-asphalt'
-=======
->>>>>>> 795b639e012abf732208c865466f8376e73b67ad
-    const sidewalkMesh = new THREE.Mesh(sidewalkGeo, this.sidewalkMaterial)
-    const curbMesh = new THREE.Mesh(curbGeo, this.curbMaterial)
-    const linesMesh = new THREE.Mesh(linesGeo, this.lineMaterial)
-    const intersectionMesh = new THREE.Mesh(intersectionGeo, this.asphaltMaterial)
-    const crosswalkMesh = new THREE.Mesh(crosswalkGeo, this.crosswalkMaterial)
-
-    intersectionMesh.renderOrder = 1
-    linesMesh.renderOrder = 2
-    crosswalkMesh.renderOrder = 3
-
-    this.trackMesh(asphaltMesh)
-    this.trackMesh(sidewalkMesh)
-    this.trackMesh(curbMesh)
-    this.trackMesh(intersectionMesh)
-    this.trackMesh(linesMesh)
-    this.trackMesh(crosswalkMesh)
-  }
-
-  private buildPlazas(): void {
-    const data = this.data
-    const positions: number[] = []
-    const indices: number[] = []
-    const n = 6
-    for (const p of data.plazas) {
-      const c = Math.cos(p.rotation)
-      const s = Math.sin(p.rotation)
-      const base = positions.length / 3
-      for (let i = 0; i <= n; i += 1) {
-        for (let j = 0; j <= n; j += 1) {
-          const lx = (i / n - 0.5) * p.size
-          const lz = (j / n - 0.5) * p.size
-          const x = p.x + lx * c + lz * s
-          const z = p.z - lx * s + lz * c
-          positions.push(x, surfaceAt(x, z) + 0.12, z)
-        }
-      }
-      for (let i = 0; i < n; i += 1) {
-        for (let j = 0; j < n; j += 1) {
-          const a = base + i * (n + 1) + j
-          indices.push(a, a + 1, a + n + 1, a + 1, a + n + 2, a + n + 1)
-        }
-      }
-    }
-    const plazaGeo = new THREE.BufferGeometry()
-    plazaGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-    plazaGeo.setIndex(indices)
-    plazaGeo.computeVertexNormals()
-    this.trackGeo(plazaGeo)
-
-    const plazaMesh = new THREE.Mesh(plazaGeo, this.plazaMaterial)
-    this.trackMesh(plazaMesh)
-
-    const fountainGeo = this.trackGeo(new THREE.CylinderGeometry(1.8, 2.1, 0.7, 16))
-    const fountains = new THREE.InstancedMesh(fountainGeo, this.fountainMaterial, Math.max(1, data.plazas.length))
-    for (const [i, p] of data.plazas.entries()) {
-      fountains.setMatrixAt(i, composeMatrix(p.x, surfaceAt(p.x, p.z) + 0.45, p.z, 0, 1, 1, 1))
-    }
-    fountains.count = data.plazas.length
-    this.trackMesh(fountains)
-  }
-
-  private buildCars(): void {
-    const data = this.data
-    const lanes = data.lanes
-    for (const [li, site] of CITY_SITES.entries()) {
-      const laneIdx = lanes.map((l, i) => (l.site === li ? i : -1)).filter(i => i >= 0)
-      if (!laneIdx.length) continue
-      const count = site.kind === 'city' ? 40 : 14
-      for (let k = 0; k < count; k += 1) {
-        const laneI = laneIdx[Math.floor(hash2(k, li, 701) * laneIdx.length)]
-        const lane = lanes[laneI]
-        const spec = ROAD_SPEC[lane.tier]
-        const dir: 1 | -1 = hash2(k, li, 705) < 0.5 ? 1 : -1
-        const lateral = dir * (spec.laneWidth / 2 + 0.15)
-        this.cars.push({
-          lane: laneI,
-          t: hash2(k, li, 702),
-          dir,
-          lateral,
-          speed: 4.5 + hash2(k, li, 703) * 4.5,
-          color: CAR_COLORS[Math.floor(hash2(k, li, 704) * CAR_COLORS.length)],
-          wheelSpin: 0,
-        })
-      }
-    }
-    for (const car of this.cars) {
-      const model = makeCar(car.color)
-      model.scale.set(0.9, 0.9, 0.9)
-      this.carGroups.push(model)
-      this.group.add(model)
-    }
-    this.updateCars(0)
-  }
-
-  private updateCars(dt: number): void {
-    const lanes = this.data.lanes
-    for (const [i, car] of this.cars.entries()) {
-      const lane = lanes[car.lane]
-      const dx = lane.bx - lane.ax
-      const dz = lane.bz - lane.az
-      const len = Math.hypot(dx, dz) || 1
-      const ux = dx / len, uz = dz / len
-
-      car.t = (car.t + (car.speed * dt) / len * car.dir + 1) % 1
-
-      const bx = lane.ax + dx * car.t
-      const bz = lane.az + dz * car.t
-      const px = -uz, pz = ux
-      const x = bx + px * car.lateral
-      const z = bz + pz * car.lateral
-
-      const f = car.t * (lane.heights.length - 1)
-      const i0 = Math.min(lane.heights.length - 1, Math.floor(f))
-      const i1 = Math.min(lane.heights.length - 1, i0 + 1)
-      const y = lane.heights[i0] + (lane.heights[i1] - lane.heights[i0]) * (f - i0) + 0.55
-
-      const heading = Math.atan2(dx * car.dir, dz * car.dir)
-      const model = this.carGroups[i]
-      model.position.set(x, y, z)
-      model.rotation.set(0, heading, 0)
-
-      car.wheelSpin += car.speed * dt * 2.2
-      for (const child of model.children) {
-        if ((child as THREE.Mesh).isMesh && (child as THREE.Mesh).geometry instanceof THREE.CylinderGeometry) {
-          child.rotation.z = Math.PI / 2 + car.wheelSpin
-        }
-      }
-    }
-  }
-
-  private buildPerches(): void {
-    const perches = this.perches
-    const beamGeo = this.trackGeo(new THREE.CylinderGeometry(1.4, 1.4, 1, 16, 1, true))
-    this.perchBeams = new THREE.InstancedMesh(beamGeo, this.beamMaterial, Math.max(1, perches.length))
-    const ringGeo = this.trackGeo(new THREE.RingGeometry(0.82, 1, 40).rotateX(-Math.PI / 2))
-    this.perchRings = new THREE.InstancedMesh(ringGeo, this.perchRingMaterial, Math.max(1, perches.length))
-    this.perchBeams.frustumCulled = false
-    this.perchRings.frustumCulled = false
-    for (const [i, p] of perches.entries()) {
-      this.perchBeams.setMatrixAt(i, composeMatrix(p.x, p.y + 15, p.z, 0, 1, 30, 1))
-      this.perchRings.setMatrixAt(i, composeMatrix(p.x, p.y + 0.5, p.z, 0, p.radius, 1, p.radius))
-      this.setPerchColor(i, false)
-    }
-    this.perchBeams.count = perches.length
-    this.perchRings.count = perches.length
-    this.trackMesh(this.perchBeams)
-    this.trackMesh(this.perchRings)
-  }
-
-  private setPerchColor(i: number, visited: boolean): void {
-    const c = new THREE.Color(visited ? 0x7ee08a : 0xffd35c)
-    this.perchBeams.setColorAt(i, c)
-    this.perchRings.setColorAt(i, c)
-    if (this.perchBeams.instanceColor) this.perchBeams.instanceColor.needsUpdate = true
-    if (this.perchRings.instanceColor) this.perchRings.instanceColor.needsUpdate = true
-  }
-
-  setVisited(ids: Iterable<number>): void {
-    const next = new Set(ids)
-    for (const p of this.perches) {
-      const was = this.visited.has(p.id)
-      const now = next.has(p.id)
-      if (was !== now) this.setPerchColor(p.id, now)
-    }
-    this.visited.clear()
-    for (const id of next) this.visited.add(id)
-  }
-
-  nearestPerch(x: number, y: number, z: number, onlyNew = true): { perch: Perch; dist: number } | null {
-    let best: { perch: Perch; dist: number } | null = null
-    for (const p of this.perches) {
-      if (onlyNew && this.visited.has(p.id)) continue
-      const d = Math.hypot(p.x - x, p.y - y, p.z - z)
-      if (!best || d < best.dist) best = { perch: p, dist: d }
-    }
-    return best
-  }
-
-  update(daylight: number, dt = 0, time = 0): void {
-    if (this.disposed) return
-    const night = THREE.MathUtils.clamp((1 - daylight) * 1.1, 0, 0.95)
-    this.windowMaterial.opacity = night * 0.95
-    this.lampMaterial.opacity = THREE.MathUtils.clamp((1 - daylight) * 1.6, 0, 1)
-    this.beaconMaterial.opacity = (0.35 + 0.65 * Math.max(0, Math.sin(time * 3))) * 0.95
-    this.beamMaterial.opacity = 0.16 + 0.07 * Math.sin(time * 2.2)
-    if (dt > 0) this.updateCars(Math.min(dt, 0.1))
+    if (nearby) this.updateTraffic(time)
   }
 }

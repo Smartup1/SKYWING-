@@ -63,15 +63,13 @@ type Chunk = { ix: number; iz: number; cx: number; cz: number; lod: number; mesh
 export class TerrainManager {
   readonly group = new THREE.Group()
   readonly material: THREE.MeshStandardMaterial
-  private readonly texture: THREE.CanvasTexture
   private readonly chunks: Chunk[] = []
   private readonly half = CONFIG.world.size / 2
   private readonly n = CONFIG.world.size / CHUNK
-  private disposed = false
 
   constructor() {
-    this.texture = detailTexture()
-    this.material = new THREE.MeshStandardMaterial({ vertexColors: true, map: this.texture, roughness: 0.96, metalness: 0 })
+    const tex = detailTexture()
+    this.material = new THREE.MeshStandardMaterial({ vertexColors: true, map: tex, roughness: 0.96, metalness: 0 })
     this.material.onBeforeCompile = shader => {
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <map_fragment>',
@@ -95,16 +93,6 @@ export class TerrainManager {
     }
   }
 
-  dispose(): void {
-    if (this.disposed) return
-    this.disposed = true
-    for (const c of this.chunks) c.mesh.geometry.dispose()
-    this.chunks.length = 0
-    this.material.dispose()
-    this.texture.dispose()
-    this.group.clear()
-  }
-
   private wantedLod(c: Chunk, camX: number, camZ: number): number {
     // Distância ao ponto mais próximo do bloco, para o LOD não depender do centro.
     const dx = Math.max(Math.abs(camX - c.cx) - CHUNK / 2, 0)
@@ -115,7 +103,6 @@ export class TerrainManager {
 
   /** Reconstrói até `budget` blocos cujo nível de detalhe mudou. Devolve quantos restam. */
   update(camX: number, camZ: number, budget: number): number {
-    if (this.disposed) return 0
     let pending: Chunk[] = []
     for (const c of this.chunks) {
       const want = this.wantedLod(c, camX, camZ)
@@ -233,12 +220,10 @@ export class TerrainManager {
 
   /** Constrói todos os blocos em fatias, para a barra de progresso. */
   async buildAll(camX: number, camZ: number, onProgress: (p: number) => void): Promise<void> {
-    if (this.disposed) return
     const total = this.chunks.length
     let done = 0
     const order = [...this.chunks].sort((a, b) => Math.hypot(a.cx - camX, a.cz - camZ) - Math.hypot(b.cx - camX, b.cz - camZ))
     for (const c of order) {
-      if (this.disposed) return
       this.build(c, this.wantedLod(c, camX, camZ))
       done += 1
       if (done % 24 === 0) {
@@ -307,12 +292,22 @@ void main() {
   float shallow = exp(-max(depth, 0.0) * 0.55);
   vec3 deepCol = vec3(0.012, 0.075, 0.115);
   vec3 shallowCol = vec3(0.05, 0.28, 0.26);
-  vec3 body = mix(deepCol, shallowCol, shallow) * (0.18 + 0.82 * uDaylight);
+  float surfaceNoise = vnoise(vWorld.xz * 0.018 + vec2(uTime * 0.025, -uTime * 0.017));
+  vec3 body = mix(deepCol, shallowCol, shallow) * (0.72 + 0.28 * surfaceNoise) * (0.18 + 0.82 * uDaylight);
+  vec2 rippleAxis = vec2(vWorld.x * 0.036 + vWorld.y * 0.014, vWorld.z * 0.041 - vWorld.x * 0.012);
+  float crest = 0.5 + 0.28 * sin(rippleAxis.x + uTime * 0.8) + 0.22 * sin(rippleAxis.y - uTime * 1.15);
+  float waveSparkle = smoothstep(0.68, 0.94, crest) * (0.2 + 0.8 * max(dot(N, uSunDir), 0.0));
   vec3 col = mix(body, sky, fres) + sunGlint * uDaylight;
-  // Espuma na margem.
+  col += uSunColor * waveSparkle * uDaylight * 0.12;
+  // Caústicas suaves aparecem perto das margens e do fundo raso.
+  float causticA = sin(vWorld.x * 0.11 + uTime * 0.7 + sin(vWorld.z * 0.08)) * sin(vWorld.z * 0.1 - uTime * 0.55);
+  float caustic = smoothstep(0.18, 0.8, causticA * 0.5 + 0.5) * shallow * uDaylight;
+  col += vec3(0.08, 0.24, 0.2) * caustic * 0.2;
+  // Espuma fina, limitada à faixa onde a água encontra a margem.
   float ripple = vnoise(vWorld.xz * 2.2 + vec2(uTime * 0.35, uTime * 0.2));
-  float foamEdge = smoothstep(0.7 + 0.25 * sin(uTime * 0.9 + ripple * 6.0), 0.0, depth + ripple * 0.35);
   float foamNoise = smoothstep(0.35, 0.7, vnoise(vWorld.xz * 4.5 + uTime * 0.2));
+  float shore = 1.0 - smoothstep(0.15, 1.4, depth);
+  float foamEdge = shore * smoothstep(-0.05, 0.18, depth) * smoothstep(0.58, 0.88, ripple + foamNoise * 0.34 + 0.1 * sin(uTime + ripple * 8.0));
   col = mix(col, vec3(0.9, 0.95, 1.0) * (0.25 + 0.75 * uDaylight), foamEdge * foamNoise * 0.7);
   float alpha = mix(0.58, 0.96, clamp(depth * 0.45, 0.0, 1.0));
   alpha = mix(alpha, 1.0, fres);
@@ -325,9 +320,7 @@ void main() {
 export class Water {
   readonly mesh: THREE.Mesh
   private readonly mat: THREE.ShaderMaterial
-  private readonly depthTex: THREE.DataTexture
-  private readonly geom: THREE.PlaneGeometry
-  private disposed = false
+  private depthTex: THREE.DataTexture
 
   constructor() {
     const size = 512
@@ -356,29 +349,18 @@ export class Water {
         },
       ]),
     })
-    this.geom = new THREE.PlaneGeometry(14000, 14000).rotateX(-Math.PI / 2)
-    this.mesh = new THREE.Mesh(this.geom, this.mat)
+    this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(14000, 14000).rotateX(-Math.PI / 2), this.mat)
     this.mesh.position.y = WATER_LEVEL
     this.mesh.renderOrder = 2
     this.mesh.frustumCulled = false
   }
 
-  dispose(): void {
-    if (this.disposed) return
-    this.disposed = true
-    this.geom.dispose()
-    this.mat.dispose()
-    this.depthTex.dispose()
-  }
-
   /** Amostra o terreno em grade grossa para saber a profundidade em qualquer ponto do lago. */
   async bake(onProgress: (p: number) => void): Promise<void> {
-    if (this.disposed) return
     const size = 512
     const data = new Uint8Array(size * size)
     const span = CONFIG.world.size
     for (let j = 0; j < size; j += 1) {
-      if (this.disposed) return
       for (let i = 0; i < size; i += 1) {
         const x = (i / (size - 1) - 0.5) * span
         const z = (j / (size - 1) - 0.5) * span
@@ -395,7 +377,6 @@ export class Water {
   }
 
   update(sky: SkyState, camPos: THREE.Vector3, time: number): void {
-    if (this.disposed) return
     this.mesh.position.x = camPos.x
     this.mesh.position.z = camPos.z
     const u = this.mat.uniforms

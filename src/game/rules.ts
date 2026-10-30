@@ -1,13 +1,10 @@
-import { CITY_SITES } from './cityLayout'
 import { CONFIG } from './config'
 
 export const NEST_COUNT = 6
-export type DiscoveryId = `nest${number}` | `city${number}` | 'summit' | 'skim' | 'flock' | 'thermal' | 'hawk' | 'dodge' | 'perfect'
+export type DiscoveryId = `nest${number}` | 'summit' | 'skim' | 'flock' | 'thermal' | 'arara-azul' | 'arara-vermelha' | 'arara-amarela'
 export const DISCOVERY_IDS: DiscoveryId[] = [
   ...Array.from({ length: NEST_COUNT }, (_, i) => `nest${i}` as DiscoveryId),
-  'summit', 'skim', 'flock', 'thermal',
-  ...CITY_SITES.map((_, i) => `city${i}` as DiscoveryId),
-  'hawk', 'dodge', 'perfect',
+  'summit', 'skim', 'flock', 'thermal', 'arara-azul', 'arara-vermelha', 'arara-amarela',
 ]
 
 export type RunState = {
