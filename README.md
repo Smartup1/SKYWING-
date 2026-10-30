@@ -24,7 +24,9 @@ Escolha uma das cinco espécies no menu **Escolher ave**. A seleção é salva n
 
 As espécies têm efeitos distintos sobre velocidade, curvas, força das batidas, consumo de fôlego, recuperação e planeio. A opção **Assistência de voo (mais fácil)** suaviza a atitude e ajuda a manter o voo; ela pode ser ajustada em **Configurações**.
 
-O vale tem três assentamentos — **Vale Claro**, **Lago Azul** e **Campina** — com fachadas variadas, janelas com caixilhos e luzes, sacadas, vitrines, marquises, pilastras, cornijas, parapeitos e telhados. Ruas têm faixas, travessias e carros em movimento com carroceria, cabine envidraçada, rodas, faróis e lanternas. O tráfego e os detalhes de fachada aparecem ao se aproximar da cidade para poupar desempenho à distância. Há bandos de **pombos**, **periquitos**, **pardais** e mais aves nos bairros, no rio e no lago. A água tem reflexos móveis, brilhos nas ondas, caústicas rasas e espuma junto às margens.
+O vale tem três assentamentos — **Vale Claro**, **Lago Azul** e **Campina** — com fachadas variadas, janelas com caixilhos e luzes, sacadas, vitrines, marquises, pilastras, cornijas, parapeitos e telhados. As ruas mostram asfalto escuro, faixas de calçada, travessias e carros em movimento com carroceria, cabine envidraçada, rodas, faróis e lanternas. Postes, isoladores e fios suspensos acompanham as ruas; seus detalhes e o tráfego aparecem ao se aproximar da cidade para poupar desempenho à distância. Há bandos de **pombos**, **periquitos**, **pardais** e mais aves nos bairros, no rio e no lago. As **araras azul, vermelha e amarela** voam perto das cidades e rendem conquistas permanentes no diário ao se aproximar. A água tem reflexos móveis, brilhos nas ondas, cáusticas rasas e espuma junto às margens.
+
+Perto de um poste, aproxime-se devagar: a opção **Pousar** aparece no celular; no teclado, pressione **L**. Pousado, o pássaro recupera fôlego e pode decolar novamente com **Espaço** (ou **Bater asas** no celular).
 
 ## Controles
 
@@ -37,6 +39,7 @@ O vale tem três assentamentos — **Vale Claro**, **Lago Azul** e **Campina** �
 | Impulsionar | Shift | Segurar **Impulso** |
 | Trocar câmera | C | **Câmera** |
 | Alternar cruzeiro automático | F | **Cruzeiro** |
+| Pousar em um poste próximo | L | **Pousar** (quando disponível) |
 | Pausar / voltar | Esc | **Pausar** |
 | Olhar ao redor | Mouse | Câmera de perseguição segue a ave |
 

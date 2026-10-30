@@ -38,3 +38,12 @@
 
 ## Tráfego e prédios — concluído
 - [x] “melhore coloque carros e deixe os predios mais reais”. Carros animados percorrem as ruas com rodas, carroceria, cabine, vidros, faróis e lanternas; a malha urbana ganha fachadas comerciais com vitrines e marquises, detalhes verticais, parapeitos, travessias e demarcações viárias.
+
+## Cidade, postes e fios — concluído
+- [x] “melhore a cidade os predios … melhore o visual da cidade coloque postes fios”. Rede instanciada de 417 postes, braços/isoladores e 364 vãos de fio acompanha as ruas e é integrada ao LOD urbano. Calçadas e asfalto em camadas ficam visíveis do alto; fachadas e tráfego seguem em malhas instanciadas.
+
+## Araras de conquista — concluído
+- [x] “coloque arara azul vermelha amarela pra conquista”. Araras azul, vermelha e amarela voam em pontos distintos; aproximar-se durante o jogo registra cada conquista uma única vez no diário e preserva o progresso local.
+
+## Pouso voluntário — concluído
+- [x] “opçao de pouso”. A tecla **L** e o botão contextual **Pousar** no celular oferecem pouso perto de um poste, com velocidade baixa; no poleiro o pássaro repousa e recupera fôlego, e Espaço/Bater asas permite decolar novamente.
