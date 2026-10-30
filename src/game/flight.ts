@@ -84,6 +84,7 @@ export class FlightModel {
   private readonly dir = new THREE.Vector3()
   private readonly acc = new THREE.Vector3()
   private readonly lift = new THREE.Vector3()
+  private readonly flapHeading = new THREE.Vector3()
   private stallLatch = false
 
   setProfile(profile: FlightProfile): void {
@@ -222,8 +223,10 @@ export class FlightModel {
       const p = this.flapPhase < 0.45 ? Math.sin((Math.PI * this.flapPhase) / 0.45) : 0
       const low = 1 + clamp((9 - s) / 9, 0, 1) * 1.15
       const strength = p * boostMul * tired * this.profile.flapPower * (auto ? 0.8 : 1)
-      this.acc.addScaledVector(this.forward, F.flapForward * strength)
-      this.acc.addScaledVector(this.up, F.flapLift * strength * low)
+      // Batidas simétricas não devem virar impulso lateral só porque o corpo está inclinado.
+      this.flapHeading.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw))
+      this.acc.addScaledVector(this.flapHeading, F.flapForward * strength)
+      this.acc.y += F.flapLift * strength * low
       const drain = (this.boosting ? S.boostDrain : S.flapDrain * (auto ? 0.35 : 1)) * this.profile.staminaUse
       this.stamina -= drain * dt
     } else {

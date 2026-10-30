@@ -29,10 +29,10 @@ export const DEFAULT_CONFIG = {
     ceiling: 430,
   },
   stamina: {
-    max: 100,
-    flapDrain: 8,
-    boostDrain: 24,
-    recover: 9,
+    max: 120,
+    flapDrain: 7,
+    boostDrain: 21,
+    recover: 12,
     restRecover: 28,
   },
   wind: {
