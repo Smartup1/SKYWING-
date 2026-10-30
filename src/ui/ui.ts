@@ -4,7 +4,6 @@ import type { Input } from '../engine/input'
 import type { Quality, SaveData, SaveStore, TimeMode } from '../engine/save'
 import { TIME_MODES } from '../engine/save'
 import type { HudData, UiBridge } from '../game/game'
-import { CITY_SITES } from '../game/cityLayout'
 import { DISCOVERY_IDS, formatDuration, NEST_COUNT, type DiscoveryId } from '../game/rules'
 import { BIRD_SPECIES, getBirdSpecies, type BirdSpeciesId } from '../game/birdSpecies'
 
@@ -18,7 +17,7 @@ export type UiActions = {
   settings(patch: Partial<SaveData>): void
   selectBird(id: BirdSpeciesId): void
   journal(): { id: DiscoveryId; found: boolean }[]
-  stats(): { seconds: number; distance: number; maxAlt: number; maxSpeed: number; seeds: number; goal: number; score: number; best: number }
+  stats(): { seconds: number; distance: number; maxAlt: number; maxSpeed: number; seeds: number; goal: number }
 }
 
 const ICONS = {
@@ -29,7 +28,15 @@ const ICONS = {
   check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12.500 4.500 4.500L19 7.500" fill="none" stroke="currentColor" stroke-width="2.500" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 }
 
-const DISC_ICON: Record<string, string> = { city: 'M4 20V9l4-2v13M10 20V4l5 2v14M17 20v-8l3 1v7M3 20h18', hawk: 'M2 6c4 0 7 3 10 9 3-6 6-9 10-9-3 2-5 5-6 8l-4 6-4-6c-1-3-3-6-6-8Z', dodge: 'M4 18c5 0 9-3 10-9M14 9l-4 1m4-1 1 4M20 5l-3 3', perfect: 'M12 3l2.600 5.600 6.100.700-4.500 4.200 1.200 6L12 16.600 6.600 19.500l1.200-6L3.300 9.300l6.100-.700Z', summit: 'M3 19 9 8l4 6 3-4 5 9Z', skim: 'M3 15c3-3 6 3 9 0s6 3 9 0M3 19c3-3 6 3 9 0s6 3 9 0', flock: 'M2 8c3 0 5 2 6 4 1-2 3-4 6-4M10 15c2 0 4 1 5 3 1-2 3-3 5-3', thermal: 'M12 22V8m0 0-5 5m5-5 5 5M8 4h8' }
+const DISC_ICON: Record<string, string> = {
+  summit: 'M3 19 9 8l4 6 3-4 5 9Z',
+  skim: 'M3 15c3-3 6 3 9 0s6 3 9 0M3 19c3-3 6 3 9 0s6 3 9 0',
+  flock: 'M2 8c3 0 5 2 6 4 1-2 3-4 6-4M10 15c2 0 4 1 5 3 1-2 3-3 5-3',
+  thermal: 'M12 22V8m0 0-5 5m5-5 5 5M8 4h8',
+  'arara-azul': 'M2 13c4-1 5-6 9-6 2 0 3 2 5 2l5-2-2 5 3 4-6-1c-2 2-4 4-7 4-3 0-5-3-8-2l2-4Z',
+  'arara-vermelha': 'M2 13c4-1 5-6 9-6 2 0 3 2 5 2l5-2-2 5 3 4-6-1c-2 2-4 4-7 4-3 0-5-3-8-2l2-4Z',
+  'arara-amarela': 'M2 13c4-1 5-6 9-6 2 0 3 2 5 2l5-2-2 5 3 4-6-1c-2 2-4 4-7 4-3 0-5-3-8-2l2-4Z',
+}
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, html?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag)
@@ -57,6 +64,8 @@ export class Ui implements UiBridge {
   private bootPct!: HTMLElement
   private tip!: HTMLElement
   private clickPrompt!: HTMLElement
+  private landButton!: HTMLButtonElement
+  private landPrompt!: HTMLElement
 
   constructor(
     private readonly root: HTMLElement,
@@ -131,7 +140,7 @@ export class Ui implements UiBridge {
   }
 
   private randomTip(): string {
-    const keys: Key[] = ['tip_1', 'tip_2', 'tip_3', 'tip_4', 'tip_5', 'tip_6', 'tip_7', 'tip_8', 'tip_9']
+    const keys: Key[] = ['tip_1', 'tip_2', 'tip_3', 'tip_4', 'tip_5', 'tip_6']
     return this.t(keys[Math.floor(Math.random() * keys.length)])
   }
 
@@ -241,9 +250,6 @@ export class Ui implements UiBridge {
       s.append(e)
       return e
     }
-    mk('hud-score', `
-      <div class="score-chip"><small>${this.t('hud_score')}</small><b data-h="score">0</b><span class="combo" data-h="combo"></span><div class="combo-track"><div class="combo-fill" data-h="comboFill"></div></div><small class="best">${this.t('hud_best')} <i data-h="best">0</i></small></div>
-      <div class="mission-chip"><small>${this.t('hud_mission')}</small><span data-h="missionText"></span><div class="mission-track"><div class="mission-fill" data-h="missionFill"></div></div></div>`)
     mk('hud-tl', `
       <div class="chip seeds">${ICONS.seed}<b data-h="seeds">0</b><span>/<i data-h="seedsGoal">0</i></span><small>${this.t('hud_seeds')}</small></div>
       <div class="chip disc">${ICONS.nest}<b data-h="disc">0</b><span>/<i data-h="discTotal">0</i></span><small>${this.t('hud_discoveries')}</small></div>`)
@@ -262,12 +268,89 @@ export class Ui implements UiBridge {
         <div><b data-h="speed">0</b><small>km/h</small></div>
         <div class="alt"><b data-h="alt">0</b><small>m · ${this.t('hud_agl').toLowerCase()} <i data-h="agl">0</i> m</small></div>
       </div>`)
-    mk('hud-hawk', `<div class="hawk-ind hidden" data-h="hawkInd"><div class="hawk-arrow" data-h="hawkArrow">${ICONS.arrow}</div><b data-h="hawkText"></b><small data-h="hawkDist"></small></div>`)
-    mk('hud-perch', `<div class="perch-ind hidden" data-h="perchInd"><div class="perch-arrow" data-h="perchArrow">${ICONS.arrow}</div><span data-h="perchText"></span></div>`)
-    mk('hud-land', `<div class="land-ind hidden" data-h="landInd">${this.t('hud_landing')}</div>`)
     mk('hud-warn', '<div class="warn" data-h="warn"></div>')
     mk('hud-vignette', '')
+    this.landPrompt = mk('land-prompt', this.t('land_prompt'))
     this.clickPrompt = mk('click-prompt', this.t('click_to_fly'))
+    const touch = el('div', 'touch-controls')
+    touch.id = 'touch-controls'
+    touch.setAttribute('aria-label', 'Controles de voo por toque')
+    const stick = el('div', 'touch-stick')
+    stick.setAttribute('role', 'application')
+    stick.setAttribute('aria-label', 'Manche virtual: arraste para subir, mergulhar e curvar')
+    stick.append(el('span', 'touch-stick-ring'), el('span', 'touch-stick-thumb'))
+    let activePointer: number | null = null
+    const moveStick = (event: PointerEvent) => {
+      if (activePointer !== event.pointerId) return
+      const rect = stick.getBoundingClientRect()
+      const radius = rect.width * 0.36
+      let dx = event.clientX - (rect.left + rect.width / 2)
+      let dy = event.clientY - (rect.top + rect.height / 2)
+      const length = Math.hypot(dx, dy)
+      if (length > radius) { dx *= radius / length; dy *= radius / length }
+      this.input.setTouchAxes(-dy / radius, -dx / radius)
+      stick.style.setProperty('--stick-x', `${dx}px`)
+      stick.style.setProperty('--stick-y', `${dy}px`)
+    }
+    const releaseStick = (event: PointerEvent) => {
+      if (activePointer !== event.pointerId) return
+      activePointer = null
+      this.input.setTouchAxes(0, 0)
+      stick.style.setProperty('--stick-x', '0px')
+      stick.style.setProperty('--stick-y', '0px')
+    }
+    stick.addEventListener('pointerdown', event => {
+      event.preventDefault()
+      activePointer = event.pointerId
+      stick.setPointerCapture(event.pointerId)
+      moveStick(event)
+    })
+    stick.addEventListener('pointermove', moveStick)
+    stick.addEventListener('pointerup', releaseStick)
+    stick.addEventListener('pointercancel', releaseStick)
+    stick.addEventListener('lostpointercapture', releaseStick)
+    const actions = el('div', 'touch-actions')
+    const button = (id: string, label: string, cls: string, run: () => void) => {
+      const b = el('button', `touch-button ${cls}`, label)
+      b.id = id
+      b.type = 'button'
+      b.setAttribute('aria-label', label)
+      b.addEventListener('click', run)
+      return b
+    }
+    const hold = (id: string, label: string, cls: string, action: 'flap' | 'boost') => {
+      const b = el('button', `touch-button ${cls}`, label)
+      b.id = id
+      b.type = 'button'
+      b.setAttribute('aria-label', label)
+      const down = (event: PointerEvent) => {
+        event.preventDefault()
+        b.setPointerCapture(event.pointerId)
+        b.classList.add('is-held')
+        this.input.setTouchButton(action, true)
+      }
+      const up = () => {
+        b.classList.remove('is-held')
+        this.input.setTouchButton(action, false)
+      }
+      b.addEventListener('pointerdown', down)
+      b.addEventListener('pointerup', up)
+      b.addEventListener('pointercancel', up)
+      b.addEventListener('lostpointercapture', up)
+      return b
+    }
+    this.landButton = button('touch-land', this.t('land_action'), 'touch-land', () => this.input.trigger('land'))
+    this.landButton.hidden = true
+    actions.append(
+      button('touch-camera', 'Câmera', 'touch-camera', () => this.input.trigger('camera')),
+      button('touch-pause', 'Pausar', 'touch-pause', () => this.input.trigger('pause')),
+      hold('touch-flap', 'Bater asas', 'touch-flap', 'flap'),
+      button('touch-cruise', 'Cruzeiro', 'touch-cruise', () => this.input.trigger('cruise')),
+      hold('touch-boost', 'Impulso', 'touch-boost', 'boost'),
+      this.landButton,
+    )
+    touch.append(stick, actions)
+    s.append(touch)
     for (const node of s.querySelectorAll<HTMLElement>('[data-h]')) this.hudEls[node.dataset.h!] = node
   }
 
@@ -287,6 +370,8 @@ export class Ui implements UiBridge {
   }
 
   hud(d: HudData): void {
+    this.landButton.hidden = !d.canLand || d.grounded
+    this.landPrompt.classList.toggle('show', d.canLand && !d.grounded)
     this.setText('seeds', String(d.seeds))
     this.setText('seedsGoal', String(d.seedsGoal))
     this.setText('disc', String(d.discoveries))
@@ -316,31 +401,8 @@ export class Ui implements UiBridge {
     } else {
       this.hudEls.seedPointer.classList.add('hidden')
     }
-    this.setText('score', d.score.toLocaleString('pt-BR'))
-    this.setText('best', d.best.toLocaleString('pt-BR'))
-    this.setText('combo', d.combo > 1 ? `×${d.combo}` : '')
-    this.setStyle('comboFill', 'transform', `scaleX(${d.comboLeft})`)
-    this.hudEls.comboFill.parentElement?.classList.toggle('hidden', d.comboLeft <= 0)
-    this.setText('missionText', d.mission.text)
-    this.setStyle('missionFill', 'transform', `scaleX(${Math.min(1, d.mission.progress / d.mission.target)})`)
-    if (d.hawk) {
-      this.hudEls.hawkInd.classList.remove('hidden')
-      this.hudEls.hawkInd.classList.toggle('stoop', d.hawk.phase === 'stoop')
-      this.setStyle('hawkArrow', 'transform', `rotate(${(d.hawk.bearing * 180) / Math.PI}deg)`)
-      this.setText('hawkText', this.t(`hud_hawk_${d.hawk.phase}` as Key))
-      this.setText('hawkDist', `${d.hawk.meters} m`)
-    } else this.hudEls.hawkInd.classList.add('hidden')
-    if (d.perch) {
-      this.hudEls.perchInd.classList.remove('hidden')
-      this.setStyle('perchArrow', 'transform', `rotate(${(d.perch.bearing * 180) / Math.PI}deg)`)
-      this.setText('perchText', this.t('hud_perch', { name: d.perch.name, meters: d.perch.meters }))
-      this.hudEls.perchInd.classList.toggle('near', d.perch.meters < 90)
-    } else this.hudEls.perchInd.classList.add('hidden')
-    this.hudEls.landInd.classList.toggle('hidden', !d.landing)
-    this.root.classList.toggle('is-hunted', !!d.hawk && d.hawk.phase === 'stoop' && d.hawk.danger > 0.45)
-    this.root.classList.toggle('is-hit', d.hit)
     const w = d.warnings[0]
-    const text = w === 'hawk' ? this.t('warn_hawk') : w === 'stall' ? this.t('warn_stall') : w === 'edge' ? this.t('warn_edge') : w === 'tired' ? this.t('warn_tired') : w === 'ceiling' ? this.t('warn_ceiling') : ''
+    const text = w === 'stall' ? this.t('warn_stall') : w === 'edge' ? this.t('warn_edge') : w === 'tired' ? this.t('warn_tired') : w === 'ceiling' ? this.t('warn_ceiling') : ''
     this.setText('warn', text)
     this.hudEls.warn.classList.toggle('show', !!text)
     this.root.classList.toggle('is-tired', d.stamina < 0.12)
@@ -367,7 +429,7 @@ export class Ui implements UiBridge {
 
   discovered(id: DiscoveryId): void {
     const name = this.discName(id)
-    const desc = id.startsWith('nest') ? this.t('toast_nest') : id.startsWith('city') ? this.t('toast_city') : id === 'dodge' ? this.t('toast_dodge_disc') : id === 'perfect' ? this.t('toast_perfect') : this.t(`toast_${id}` as Key)
+    const desc = id.startsWith('nest') ? this.t('toast_nest') : this.t(`toast_${id}` as Key)
     this.banner.innerHTML = `<small>${this.t('journal')}</small><b>${name}</b><span>${desc}</span>`
     this.banner.classList.add('show')
     window.clearTimeout(this.bannerTimer)
@@ -414,8 +476,6 @@ export class Ui implements UiBridge {
     const node = document.getElementById('pause-stats')
     if (!node) return
     node.innerHTML = `
-      <div><small>${this.t('stats_score')}</small><b>${st.score.toLocaleString('pt-BR')}</b></div>
-      <div><small>${this.t('hud_best')}</small><b>${st.best.toLocaleString('pt-BR')}</b></div>
       <div><small>${this.t('hud_seeds')}</small><b>${st.seeds}/${st.goal}</b></div>
       <div><small>${this.t('stats_time')}</small><b>${formatDuration(st.seconds)}</b></div>
       <div><small>${this.t('stats_distance')}</small><b>${(st.distance / 1000).toFixed(1)} km</b></div>
@@ -480,7 +540,6 @@ export class Ui implements UiBridge {
     toggle('set_motion', d.reducedMotion, v => ({ reducedMotion: v }))
     toggle('set_cruise', d.cruise, v => ({ cruise: v }))
     toggle('set_flight_assist', d.flightAssist, v => ({ flightAssist: v }))
-    toggle('set_hawks', d.hawks, v => ({ hawks: v }))
     select<Quality>('set_quality', d.quality, [['low', 'q_low'], ['medium', 'q_medium'], ['high', 'q_high']], v => ({ quality: v }))
     select<TimeMode>('set_time', d.timeMode, TIME_MODES.map(m => [m, `t_${m}` as Key]), v => ({ timeMode: v }))
     panel.append(grid)
@@ -498,12 +557,12 @@ export class Ui implements UiBridge {
     panel.append(el('h2', '', this.t('controls')))
     const rows: [Key, Key][] = [
       ['ctrl_pitch', 'key_pitch'], ['ctrl_turn', 'key_turn'], ['ctrl_roll', 'key_roll'], ['ctrl_flap', 'key_flap'],
-      ['ctrl_boost', 'key_boost'], ['ctrl_land', 'key_land'], ['ctrl_look', 'key_look'], ['ctrl_camera', 'key_camera'], ['ctrl_cruise', 'key_cruise'], ['ctrl_pause', 'key_pause'],
+      ['ctrl_boost', 'key_boost'], ['ctrl_look', 'key_look'], ['ctrl_camera', 'key_camera'], ['ctrl_cruise', 'key_cruise'], ['ctrl_land', 'key_land'], ['ctrl_pause', 'key_pause'],
     ]
     const table = el('div', 'keys')
     for (const [a, k] of rows) table.append(el('div', 'key-row', `<span>${this.t(a)}</span><kbd>${this.t(k)}</kbd>`))
     panel.append(table)
-    for (const k of ['tip_1', 'tip_7', 'tip_8'] as Key[]) panel.append(el('p', 'tip-line', this.t(k)))
+    for (const k of ['tip_1', 'tip_2', 'tip_3'] as Key[]) panel.append(el('p', 'tip-line', this.t(k)))
     const back = this.button(this.t('back'), () => this.back(), 'primary')
     back.dataset.autofocus = ''
     panel.append(back)
@@ -514,12 +573,10 @@ export class Ui implements UiBridge {
 
   private discName(id: DiscoveryId): string {
     if (id.startsWith('nest')) return this.t('disc_nest', { n: Number(id.slice(4)) + 1 })
-    if (id.startsWith('city')) return this.t('disc_city', { name: CITY_SITES[Number(id.slice(4))]?.name ?? '' })
     return this.t(`disc_${id}` as Key)
   }
 
   private discDesc(id: DiscoveryId): string {
-    if (id.startsWith('city')) return this.t('disc_desc_city', { name: CITY_SITES[Number(id.slice(4))]?.name ?? '' })
     return id.startsWith('nest') ? this.t('disc_desc_nest') : this.t(`disc_desc_${id}` as Key)
   }
 
@@ -545,7 +602,7 @@ export class Ui implements UiBridge {
     for (const e of entries) {
       const found = e.found || known.has(e.id)
       const isNest = e.id.startsWith('nest')
-      const path = DISC_ICON[e.id.startsWith('city') ? 'city' : e.id]
+      const path = DISC_ICON[e.id]
       const icon = isNest ? ICONS.nest : `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${path}" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg>`
       const row = el('div', `journal-row${found ? ' found' : ''}`, `${icon}<div><b>${found || !isNest ? this.discName(e.id) : this.discName(e.id)}</b><span>${this.discDesc(e.id)}</span></div><i>${found ? ICONS.check : ''}</i>`)
       list.append(row)
