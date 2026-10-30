@@ -14,9 +14,9 @@ export const QUALITY_PRESETS: Record<Quality, Preset> = {
 
 /** Pick a starting quality from device hints; the player can override it in Settings. */
 export function suggestQuality(): Quality {
-  const coarse = matchMedia('(pointer: coarse)').matches
+  const coarse = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0
   const cores = navigator.hardwareConcurrency ?? 4
-  if (coarse || cores <= 4) return 'medium'
+  if (coarse || cores <= 4) return 'low'
   return 'high'
 }
 
@@ -50,7 +50,8 @@ export class Renderer {
   applyQuality(quality: Quality): void {
     this.preset = QUALITY_PRESETS[quality]
     this.gl.shadowMap.enabled = this.preset.shadows
-    this.gl.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.preset.pixelRatio))
+    const mobileCap = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0 ? 1.25 : Infinity
+    this.gl.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.preset.pixelRatio, mobileCap))
     this.bloom?.dispose()
     this.composer?.dispose()
     this.composer = undefined

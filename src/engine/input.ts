@@ -2,7 +2,7 @@
  * Entrada unificada: teclado, mouse (olhar) e controle. O voo lê eixos suavizados; ações de toque
  * único (pausar, câmera, cruzeiro, bater asas) são consumidas uma vez por pressionamento.
  */
-export type Action = 'pause' | 'camera' | 'cruise' | 'flapPressed'
+export type Action = 'pause' | 'camera' | 'cruise' | 'flapPressed' | 'land'
 
 const MOVEMENT_KEYS = new Set([
   'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'Space', 'ShiftLeft', 'ShiftRight',
@@ -18,15 +18,13 @@ const approach = (v: number, target: number, rate: number, dt: number) => {
 export class Input {
   sensitivity = 0.5
   invertY = false
-  method: 'keyboard' | 'gamepad' = 'keyboard'
+  method: 'keyboard' | 'gamepad' | 'touch' = 'keyboard'
   /** Eixos suavizados: pitch +1 sobe, bank +1 esquerda, roll +1 rola à esquerda. */
   pitch = 0
   bank = 0
   roll = 0
   flap = false
   boost = false
-  /** Segurando "pousar" (L ou botão B do controle). */
-  land = false
   /** Quando falso, as teclas de voo são ignoradas (menus). */
   enabled = false
   private readonly keys = new Set<string>()
@@ -37,17 +35,25 @@ export class Input {
   private padLookY = 0
   private padFlap = false
   private padBoost = false
-  private padLand = false
   private padPitch = 0
   private padBank = 0
   private padRoll = 0
+  private touchPitch = 0
+  private touchBank = 0
+  private touchFlap = false
+  private touchBoost = false
   private lastPadButtons: boolean[] = []
   private dragging = false
 
   constructor(private readonly canvas: HTMLCanvasElement) {
+    if (navigator.maxTouchPoints > 0 || matchMedia('(pointer: coarse)').matches) this.method = 'touch'
     window.addEventListener('keydown', e => this.onKey(e, true))
     window.addEventListener('keyup', e => this.onKey(e, false))
-    window.addEventListener('blur', () => this.keys.clear())
+    window.addEventListener('blur', () => {
+      this.keys.clear()
+      this.touchPitch = this.touchBank = 0
+      this.touchFlap = this.touchBoost = false
+    })
     window.addEventListener('mousemove', e => this.onMove(e))
     canvas.addEventListener('mousedown', () => { this.dragging = true })
     window.addEventListener('mouseup', () => { this.dragging = false })
@@ -62,6 +68,7 @@ export class Input {
       if (!e.repeat) {
         if (e.code === 'KeyC') this.pressed.add('camera')
         if (e.code === 'KeyF') this.pressed.add('cruise')
+        if (e.code === 'KeyL') this.pressed.add('land')
         if (e.code === 'Space') this.pressed.add('flapPressed')
       }
       if (MOVEMENT_KEYS.has(e.code)) e.preventDefault()
@@ -94,14 +101,36 @@ export class Input {
     if (live && this.padPitch !== 0) pitchT = this.padPitch
     if (live && this.padBank !== 0) bankT = this.padBank
     if (live && this.padRoll !== 0) rollT = this.padRoll
+    if (live && this.touchPitch !== 0) pitchT = this.touchPitch
+    if (live && this.touchBank !== 0) bankT = this.touchBank
     if (this.invertY) pitchT = -pitchT
     // Ataque rápido, soltura um pouco mais lenta: sensação de controle de ave.
     this.pitch = approach(this.pitch, pitchT, pitchT === 0 ? 7 : 5.5, dt)
     this.bank = approach(this.bank, bankT, bankT === 0 ? 5 : 4.2, dt)
     this.roll = approach(this.roll, rollT, rollT === 0 ? 6 : 8, dt)
-    this.flap = live && (this.held('Space') || this.padFlap)
-    this.boost = live && (this.held('ShiftLeft', 'ShiftRight') || this.padBoost)
-    this.land = live && (this.held('KeyL') || this.padLand)
+    this.flap = live && (this.held('Space') || this.padFlap || this.touchFlap)
+    this.boost = live && (this.held('ShiftLeft', 'ShiftRight') || this.padBoost || this.touchBoost)
+  }
+
+  /** Manche virtual: pitch +1 sobe; bank +1 curva à esquerda. */
+  setTouchAxes(pitch: number, bank: number): void {
+    this.touchPitch = Math.max(-1, Math.min(1, pitch))
+    this.touchBank = Math.max(-1, Math.min(1, bank))
+    if (pitch !== 0 || bank !== 0) this.method = 'touch'
+  }
+
+  /** Botões de ação com estado sustentado e disparo de toque único na decolagem. */
+  setTouchButton(action: 'flap' | 'boost', down: boolean): void {
+    this.method = 'touch'
+    if (action === 'flap') {
+      this.touchFlap = down
+      if (down) this.pressed.add('flapPressed')
+    } else this.touchBoost = down
+  }
+
+  trigger(action: Action): void {
+    this.method = 'touch'
+    this.pressed.add(action)
   }
 
   /** Movimento de olhar acumulado desde a última leitura (radianos). */
@@ -125,7 +154,7 @@ export class Input {
     const pad = navigator.getGamepads?.().find(p => p?.connected)
     if (!pad) {
       this.padPitch = this.padBank = this.padRoll = this.padLookX = this.padLookY = 0
-      this.padFlap = this.padBoost = this.padLand = false
+      this.padFlap = this.padBoost = false
       return
     }
     const dz = (v: number) => (Math.abs(v) < 0.14 ? 0 : v)
@@ -137,7 +166,6 @@ export class Input {
     this.padLookY = dz(pad.axes[3] ?? 0)
     this.padRoll = (b[4] ? 1 : 0) - (b[5] ? 1 : 0)
     this.padFlap = !!b[0]
-    this.padLand = !!b[1]
     this.padBoost = !!b[7] || (pad.buttons[7]?.value ?? 0) > 0.4
     if (edge(0) && this.enabled) this.pressed.add('flapPressed')
     if (edge(3)) this.pressed.add('camera')

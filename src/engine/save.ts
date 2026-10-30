@@ -18,14 +18,11 @@ export type SaveData = {
   timeMode: TimeMode
   cruise: boolean
   flightAssist: boolean
-  /** Gavião caçador (perseguições) ligado. */
-  hawks: boolean
   birdId: BirdSpeciesId
   discoveries: string[]
   totalSeeds: number
   flightSeconds: number
   bestSeeds: number
-  bestScore: number
   introSeen: boolean
 }
 
@@ -41,13 +38,11 @@ export const defaultSave = (): SaveData => ({
   timeMode: 'auto',
   cruise: true,
   flightAssist: true,
-  hawks: true,
   birdId: DEFAULT_BIRD_ID,
   discoveries: [],
   totalSeeds: 0,
   flightSeconds: 0,
   bestSeeds: 0,
-  bestScore: 0,
   introSeen: false,
 })
 
@@ -78,13 +73,11 @@ export function parseSave(raw: string | null): SaveData {
     timeMode: TIME_MODES.includes(p.timeMode as TimeMode) ? (p.timeMode as TimeMode) : base.timeMode,
     cruise: p.cruise !== false,
     flightAssist: p.flightAssist !== false,
-    hawks: p.hawks !== false,
     birdId: isBirdSpeciesId(p.birdId) ? p.birdId : base.birdId,
     discoveries: Array.isArray(p.discoveries) ? p.discoveries.filter((d): d is string => typeof d === 'string').slice(0, 32) : [],
     totalSeeds: nonNeg(p.totalSeeds),
     flightSeconds: nonNeg(p.flightSeconds),
     bestSeeds: nonNeg(p.bestSeeds),
-    bestScore: nonNeg(p.bestScore),
     introSeen: p.introSeen === true,
   }
 }
